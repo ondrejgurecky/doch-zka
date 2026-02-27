@@ -1368,7 +1368,7 @@ def page_dashboard():
 
     # ── Rychlé akce (příchod/odchod/pauza) ──────────────────
     _dash_user = st.session_state.user
-    _dash_att  = get_attendance(_dash_user["id"])
+    _dash_att  = dict(get_attendance(_dash_user["id"])) if get_attendance(_dash_user["id"]) else None
     _absences_today = get_absences_for_date()
     _my_absence = next((a for a in _absences_today if a["user_id"] == _dash_user["id"]), None)
     if not _my_absence:
