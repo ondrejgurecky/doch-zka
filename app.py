@@ -3,9 +3,13 @@ import streamlit.components.v1 as _components
 import sqlite3
 import pandas as pd
 import hashlib
+import json
 import os
 import io
 import base64
+import threading
+import shutil
+import glob
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -16,7 +20,11 @@ from zoneinfo import ZoneInfo
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-DB_PATH   = Path(__file__).parent / "dochazka.db"
+DB_PATH    = Path(__file__).parent / "dochazka.db"
+BACKUP_DIR = Path(__file__).parent / "backups"
+BACKUP_DIR.mkdir(exist_ok=True)
+BACKUP_KEEP = 30      # max počet uchovávaných automatických záloh
+BACKUP_INTERVAL_H = 6 # každých N hodin
 CET       = ZoneInfo("Europe/Prague")
 BASE_DIR  = Path(__file__).parent
 
@@ -470,6 +478,65 @@ hr { border-color: var(--border) !important; }
 
 # ─────────────────────────────────────────────
 # DATABASE
+
+# ─────────────────────────────────────────────
+# AUTOMATICKÁ ZÁLOHA
+# ─────────────────────────────────────────────
+def _do_backup(label: str = "auto") -> Path | None:
+    """Zkopíruje DB do BACKUP_DIR. Vrátí cestu k záloze nebo None."""
+    if not DB_PATH.exists():
+        return None
+    ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest = BACKUP_DIR / f"dochazka_{label}_{ts}.sqlite"
+    try:
+        # Použij SQLite Online Backup API – bezpečné za provozu
+        src_conn = sqlite3.connect(DB_PATH)
+        dst_conn = sqlite3.connect(dest)
+        src_conn.backup(dst_conn)
+        dst_conn.close()
+        src_conn.close()
+        # Udržuj max BACKUP_KEEP souborů pro každý label
+        pattern = str(BACKUP_DIR / f"dochazka_{label}_*.sqlite")
+        old = sorted(glob.glob(pattern))
+        for f in old[:-BACKUP_KEEP]:
+            try: os.remove(f)
+            except Exception: pass
+        return dest
+    except Exception:
+        return None
+
+
+def _auto_backup_loop():
+    """Běží v daemon threadu; zálohuje každých BACKUP_INTERVAL_H hodin."""
+    import time
+    while True:
+        time.sleep(BACKUP_INTERVAL_H * 3600)
+        _do_backup("auto")
+
+
+def start_auto_backup():
+    """Spustí background thread pro automatické zálohy (jednou za session)."""
+    if not st.session_state.get("_backup_thread_started"):
+        t = threading.Thread(target=_auto_backup_loop, daemon=True)
+        t.start()
+        st.session_state["_backup_thread_started"] = True
+
+
+def list_backups() -> list[dict]:
+    """Vrátí seznam všech záloh seřazených od nejnovější."""
+    files = sorted(glob.glob(str(BACKUP_DIR / "dochazka_*.sqlite")), reverse=True)
+    result = []
+    for f in files:
+        p    = Path(f)
+        size = p.stat().st_size
+        name = p.name  # dochazka_auto_20250227_143000.sqlite
+        parts = name.replace(".sqlite", "").split("_")
+        # parts: ['dochazka', label, date, time]
+        label = parts[1] if len(parts) >= 4 else "?"
+        result.append({"path": f, "name": p.name, "size": size, "label": label})
+    return result
+
+
 # ─────────────────────────────────────────────
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -546,6 +613,7 @@ def init_db():
         """)
         for _migration in [
             "ALTER TABLE absences ADD COLUMN email_sent INTEGER DEFAULT 0",
+            "ALTER TABLE absences ADD COLUMN half_days TEXT DEFAULT '[]'",
         ]:
             try:
                 conn.execute(_migration)
@@ -689,11 +757,14 @@ def end_pause(att_id):
     return True, "Pauza ukončena ✓"
 
 # ── Absences ──
-def request_absence(user_id, absence_type, date_from, date_to, note=""):
+def request_absence(user_id, absence_type, date_from, date_to, note="", half_days=None):
+    hd_json = json.dumps([d.isoformat() if hasattr(d, 'isoformat') else d
+                          for d in (half_days or [])])
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO absences(user_id,absence_type,date_from,date_to,note) VALUES(?,?,?,?,?)",
-            (user_id, absence_type, date_from.isoformat(), date_to.isoformat(), note)
+            "INSERT INTO absences(user_id,absence_type,date_from,date_to,note,half_days)"
+            " VALUES(?,?,?,?,?,?)",
+            (user_id, absence_type, date_from.isoformat(), date_to.isoformat(), note, hd_json)
         )
         conn.commit()
 
@@ -1016,23 +1087,35 @@ def count_workdays_so_far(year: int, month: int) -> int:
     return count_workdays_in_range(first, last)
 
 
-def count_absence_workdays(user_id: int, year: int, month: int) -> int:
-    """Počet schválených pracovních dní absence (dovolená / sickday / nemoc) v daném měsíci."""
+def count_absence_workdays(user_id: int, year: int, month: int) -> float:
+    """Počet schválených pracovních dní absence v daném měsíci (půlden v half_days = 0.5)."""
     first = date(year, month, 1)
     last  = (date(year, month + 1, 1) - timedelta(days=1)) if month < 12 else date(year, 12, 31)
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT date_from, date_to FROM absences
+            """SELECT absence_type, date_from, date_to, half_days FROM absences
                WHERE user_id=? AND approved=1
-               AND absence_type IN ('vacation','sickday','nemoc')
+               AND absence_type IN ('vacation','vacation_half','sickday','nemoc')
                AND date_to >= ? AND date_from <= ?""",
             (user_id, first.isoformat(), last.isoformat())
         ).fetchall()
-    total = 0
+    total = 0.0
     for row in rows:
-        ab_from = max(date.fromisoformat(row["date_from"]), first)
-        ab_to   = min(date.fromisoformat(row["date_to"]),   last)
-        total  += count_workdays_in_range(ab_from, ab_to)
+        if row["absence_type"] == "vacation_half":
+            total += 0.5
+        elif row["absence_type"] == "vacation":
+            hd  = set(json.loads(row["half_days"] or "[]"))
+            ab_from = max(date.fromisoformat(row["date_from"]), first)
+            ab_to   = min(date.fromisoformat(row["date_to"]),   last)
+            cur = ab_from
+            while cur <= ab_to:
+                if is_workday(cur):
+                    total += 0.5 if cur.isoformat() in hd else 1.0
+                cur += timedelta(days=1)
+        else:
+            ab_from = max(date.fromisoformat(row["date_from"]), first)
+            ab_to   = min(date.fromisoformat(row["date_to"]),   last)
+            total  += count_workdays_in_range(ab_from, ab_to)
     return total
 
 
@@ -1174,6 +1257,56 @@ def page_login():
             Výchozí admin: admin / admin123
         </p>""", unsafe_allow_html=True)
 
+
+
+# ── Admin – přímá editace docházky ──────────────────────────────
+def admin_set_attendance(user_id: int, day: str, checkin: str, checkout: str):
+    """Nastaví nebo přepíše příchod/odchod pro libovolného uživatele."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM attendance WHERE user_id=? AND date=?", (user_id, day)
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE attendance SET checkin_time=?, checkout_time=? WHERE id=?",
+                (checkin or None, checkout or None, row["id"])
+            )
+        else:
+            conn.execute(
+                "INSERT INTO attendance(user_id, date, checkin_time, checkout_time)"
+                " VALUES(?,?,?,?)",
+                (user_id, day, checkin or None, checkout or None)
+            )
+        conn.commit()
+
+
+def admin_set_pause(att_id: int, pause_type: str, start: str, end: str):
+    """Přidá nebo přepíše pauzu k záznamu docházky."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO pauses(attendance_id, pause_type, start_time, end_time)"
+            " VALUES(?,?,?,?)",
+            (att_id, pause_type, start, end or None)
+        )
+        conn.commit()
+
+
+def admin_delete_pause(pause_id: int):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM pauses WHERE id=?", (pause_id,))
+        conn.commit()
+
+
+def admin_clear_attendance(user_id: int, day: str):
+    """Smaže celý záznam docházky včetně pauz."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM attendance WHERE user_id=? AND date=?", (user_id, day)
+        ).fetchone()
+        if row:
+            conn.execute("DELETE FROM pauses WHERE attendance_id=?", (row["id"],))
+            conn.execute("DELETE FROM attendance WHERE id=?", (row["id"],))
+            conn.commit()
 
 # ─────────────────────────────────────────────
 # PAGE: DASHBOARD
@@ -1455,12 +1588,11 @@ def page_absences():
     with tab1:
         abs_type = st.selectbox(
             "Typ absence",
-            ["sickday", "nemoc", "vacation", "vacation_half"],
+            ["vacation", "sickday", "nemoc"],
             format_func=lambda x: {
-                "sickday":       "🤒 Sickday (1 den z fondu)",
-                "nemoc":         "🏥 Nemoc / PN (více dní, nečerpá fond)",
-                "vacation":      "🏖 Dovolená – celý den / více dní",
-                "vacation_half": "🌅 Dovolená – půlden (0,5 dne)",
+                "vacation": "🏖 Dovolená",
+                "sickday":  "🤒 Sickday (1 den z fondu)",
+                "nemoc":    "🏥 Nemoc / PN (více dní, nečerpá fond)",
             }[x]
         )
 
@@ -1470,19 +1602,14 @@ def page_absences():
             sick_date = st.date_input("Den", value=cet_today(),
                                       min_value=cet_today() - timedelta(days=60), format="DD.MM.YYYY")
             date_from = date_to = sick_date
+            half_days_sel = []
 
         elif abs_type == "nemoc":
             st.caption("Zadejte začátek nemoci. Konec lze doplnit v záložce 'Konec nemoci'. Nemoc nečerpá fond.")
             date_from = st.date_input("Začátek nemoci", value=cet_today(),
                                       min_value=cet_today() - timedelta(days=90), format="DD.MM.YYYY")
             date_to = date_from
-
-        elif abs_type == "vacation_half":
-            if summ["vacation_remain"] < 0.5:
-                st.warning(f"Nemáte dostatek dovolené (zbývá {summ['vacation_remain']:.1f} dní).")
-            date_from = st.date_input("Den půldne dovolené", value=cet_today(), format="DD.MM.YYYY")
-            date_to   = date_from
-            st.caption("Odečte 0,5 dne z fondu dovolené a zkrátí fond pracovní doby o 4 hodiny.")
+            half_days_sel = []
 
         else:  # vacation
             if summ["vacation_remain"] <= 0:
@@ -1491,15 +1618,59 @@ def page_absences():
             with c1:
                 date_from = st.date_input("Od", value=cet_today(), format="DD.MM.YYYY")
             with c2:
-                date_to   = st.date_input("Do", value=cet_today(), format="DD.MM.YYYY")
+                date_to = st.date_input("Do", value=cet_today(), format="DD.MM.YYYY")
+
+            half_days_sel = []
+            if date_to >= date_from:
+                workdays_in_range = []
+                cur = date_from
+                while cur <= date_to:
+                    if is_workday(cur):
+                        workdays_in_range.append(cur)
+                    cur += timedelta(days=1)
+
+                if workdays_in_range:
+                    total_full = len(workdays_in_range)
+                    st.caption(
+                        f"Rozsah obsahuje **{total_full}** "
+                        f"{'pracovní den' if total_full == 1 else 'pracovní dny' if total_full < 5 else 'pracovních dní'}. "
+                        "Zaškrtněte dny, které chcete vzít jako **půlden** (0,5 dne z fondu)."
+                    )
+                    DOW_NAMES  = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"]
+                    MONTH_SH   = ["led","úno","bře","dub","kvě","čer","čvc","srp","zář","říj","lis","pro"]
+                    chunk_size = min(7, len(workdays_in_range))
+                    for chunk_start in range(0, len(workdays_in_range), chunk_size):
+                        chunk = workdays_in_range[chunk_start:chunk_start + chunk_size]
+                        cols  = st.columns(len(chunk))
+                        for col, wd in zip(cols, chunk):
+                            label = f"{DOW_NAMES[wd.weekday()]} {wd.day}.{MONTH_SH[wd.month-1]}"
+                            if col.checkbox(label, key=f"hd_{wd.isoformat()}", value=False):
+                                half_days_sel.append(wd)
+
+                    full_cnt     = len(workdays_in_range) - len(half_days_sel)
+                    half_cnt     = len(half_days_sel)
+                    total_deduct = full_cnt + half_cnt * 0.5
+                    remain_after = summ["vacation_remain"] - total_deduct
+                    color_remain = "green" if remain_after >= 0 else "red"
+                    st.markdown(
+                        f"**Odečteno z fondu:** {total_deduct:.1f} dní "
+                        f"({full_cnt}× celý" + (f", {half_cnt}× půlden" if half_cnt else "") + ")"
+                        f" &nbsp;·&nbsp; Zbývá: "
+                        f"<span style='font-weight:700;color:{'#145c38' if remain_after>=0 else '#9b2116'}'>"
+                        f"{remain_after:.1f} dní</span>",
+                        unsafe_allow_html=True
+                    )
 
         note = st.text_input("Poznámka (nepovinné)")
 
         if st.button("Odeslat žádost", type="primary"):
-            if abs_type not in ("nemoc", "vacation_half") and date_to < date_from:
+            if abs_type == "nemoc" and date_to < date_from:
+                st.error("Datum 'Do' musí být stejné nebo pozdější než 'Od'.")
+            elif abs_type not in ("nemoc", "sickday") and date_to < date_from:
                 st.error("Datum 'Do' musí být stejné nebo pozdější než 'Od'.")
             else:
-                request_absence(user["id"], abs_type, date_from, date_to, note)
+                request_absence(user["id"], abs_type, date_from, date_to, note,
+                                half_days=half_days_sel if abs_type == "vacation" else [])
                 st.success("Žádost odeslána ✓")
                 st.rerun()
 
@@ -1555,10 +1726,12 @@ def page_absences():
                 date_str = f"od {a['date_from']} – <em>konec nezadán</em>"
             else:
                 date_str = a["date_from"] if a["date_from"] == a["date_to"] else f"{a['date_from']} – {a['date_to']}"
+            hd_list   = json.loads(a.get("half_days") or "[]")
+            half_info = (" · 🌅 půlden: " + ", ".join(hd_list)) if hd_list else ""
             email_str = " · ✉ email odeslán" if a.get("email_sent") else ""
             st.markdown(f"""<div class="card card-{s_color}">
                 <strong style="color:#1e293b">{type_label}</strong>
-                <span style="color:#475569"> · {date_str}{note_str}</span><br>
+                <span style="color:#475569"> · {date_str}{note_str}{half_info}</span><br>
                 <small style="color:#64748b">{status_str}{email_str}</small>
             </div>""", unsafe_allow_html=True)
             if a["approved"] == 0:
@@ -1637,6 +1810,7 @@ def page_corrections():
 def page_reports():
     user     = st.session_state.user
     is_admin = user["role"] == "admin"
+    start_auto_backup()  # spustí daemon thread (jednou za session)
     st.markdown("""<div class="page-header">
         <h1>📈 Výkazy docházky</h1>
         <p>Měsíční přehled odpracovaných hodin</p>
@@ -1749,10 +1923,10 @@ def page_admin():
     </div>
     <div class="content-pad">""", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "👥 Uživatelé", "➕ Nový uživatel",
         "🤒 Vložit nemoc", "✅ Schválení absencí", "✏️ Schválení úprav",
-        "📊 Fondy dovolené"
+        "📊 Fondy dovolené", "💾 Záloha databáze", "✏️ Přímá editace docházky"
     ])
 
     # ── Tab 1: Users ──────────────────────────────────────
@@ -1997,6 +2171,252 @@ def page_admin():
                     st.success(f"Uloženo: {u['display_name']} – dovolená {int(vd)}+{int(vc)} dní, sickday {int(sd)} ✓")
                     st.rerun()
 
+
+    # ── Tab 7: Záloha / Export / Import ─────────────────────
+    with tab7:
+        st.markdown("### 💾 Záloha a obnova databáze")
+
+        # Info o persistenci
+        st.info(
+            "**Kde zálohy žijí?** Automatické zálohy se ukládají do složky `backups/` "
+            "vedle databáze. Na **vlastním serveru** (VPS, Railway s volumes, Docker) zálohy "
+            "přežijí restart aplikace. Na **Streamlit Cloud** je filesystem ephemeral – "
+            "zálohy se smažou při redeploymentu. V takovém případě používejte ruční stažení zálohy "
+            "a ukládejte ji mimo cloud.",
+            icon="ℹ️"
+        )
+
+        # ── Automatická záloha – stav ──────────────────────────
+        st.markdown("#### 🔄 Automatická záloha")
+        _bkp_interval = st.number_input(
+            "Interval automatické zálohy (hodiny)", min_value=1, max_value=168,
+            value=BACKUP_INTERVAL_H, key="bkp_interval_display", disabled=True
+        )
+        _bcol1, _bcol2 = st.columns(2)
+        with _bcol1:
+            if st.button("▶ Zálohovat nyní", use_container_width=True):
+                _bp = _do_backup("manual")
+                if _bp:
+                    st.success(f"✅ Záloha vytvořena: `{Path(_bp).name}`")
+                else:
+                    st.error("Záloha se nezdařila.")
+        with _bcol2:
+            _bkp_running = st.session_state.get("_backup_thread_started", False)
+            st.markdown(
+                f"<div style='padding:8px 12px;border-radius:8px;font-size:13px;"
+                f"background:{'#dcfce7' if _bkp_running else '#fee2e2'};"
+                f"color:{'#14532d' if _bkp_running else '#7f1d1d'};font-weight:600'>"
+                f"{'🟢 Automatická záloha běží' if _bkp_running else '🔴 Automatická záloha neběží'}</div>",
+                unsafe_allow_html=True
+            )
+
+        # ── Přehled existujících záloh ─────────────────────────
+        _backups = list_backups()
+        if _backups:
+            st.markdown(f"**Uložené zálohy** ({len(_backups)} souborů ve složce `backups/`):")
+            for _b in _backups[:10]:
+                _sz = f"{_b['size']/1024:.1f} kB"
+                _lbl_color = "#dbeafe" if _b["label"] == "auto" else "#dcfce7"
+                _lbl_text  = "auto" if _b["label"] == "auto" else "manuální"
+                _bcols = st.columns([3, 1, 1])
+                _bcols[0].markdown(
+                    f"<span style='font-size:12px;font-family:monospace'>{_b['name']}</span> "
+                    f"<span style='background:{_lbl_color};border-radius:4px;padding:1px 6px;"
+                    f"font-size:11px;font-weight:600'>{_lbl_text}</span> "
+                    f"<span style='color:#94a3b8;font-size:11px'>{_sz}</span>",
+                    unsafe_allow_html=True
+                )
+                with open(_b["path"], "rb") as _bf:
+                    _bdata = _bf.read()
+                _bcols[1].download_button(
+                    "⬇", data=_bdata, file_name=_b["name"],
+                    mime="application/octet-stream", key=f"dl_{_b['name']}"
+                )
+        else:
+            st.caption("Zatím žádné zálohy. Klikněte na '▶ Zálohovat nyní'.")
+
+        st.markdown("---")
+
+        # ── Ruční stažení a export ─────────────────────────────
+        _ecol1, _ecol2 = st.columns(2)
+        with _ecol1:
+            st.markdown("#### ⬇ Záloha SQLite")
+            if DB_PATH.exists():
+                with open(DB_PATH, "rb") as _fdb:
+                    _db_bytes = _fdb.read()
+                _ts = datetime.now().strftime("%Y%m%d_%H%M")
+                st.download_button(
+                    "⬇ Stáhnout aktuální DB (.sqlite)",
+                    data=_db_bytes,
+                    file_name=f"dochazka_backup_{_ts}.sqlite",
+                    mime="application/octet-stream",
+                    use_container_width=True,
+                )
+                st.caption(f"{len(_db_bytes)/1024:.1f} kB")
+
+        with _ecol2:
+            st.markdown("#### ⬇ Export JSON")
+            if DB_PATH.exists():
+                with get_conn() as _ec:
+                    _tables = [r[0] for r in _ec.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()]
+                    _export = {t: [dict(r) for r in _ec.execute(f"SELECT * FROM {t}").fetchall()]
+                               for t in _tables}
+                _json_bytes = json.dumps(_export, ensure_ascii=False, indent=2).encode("utf-8")
+                _ts2 = datetime.now().strftime("%Y%m%d_%H%M")
+                st.download_button(
+                    "⬇ Exportovat jako JSON",
+                    data=_json_bytes,
+                    file_name=f"dochazka_export_{_ts2}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+                st.caption(f"Tabulky: {', '.join(_tables)}")
+
+        st.markdown("---")
+        st.markdown("#### ⬆ Obnova ze zálohy")
+        st.warning("⚠️ **Obnova přepíše celou stávající databázi!** Nejdřív si stáhněte aktuální zálohu.")
+        _uploaded = st.file_uploader(
+            "Nahrajte záložní soubor (.sqlite / .db)",
+            type=["sqlite", "db", "sqlite3"],
+            key="db_restore_upload"
+        )
+        if _uploaded is not None:
+            _confirm = st.checkbox("Rozumím – obnova přepíše stávající data", key="confirm_restore")
+            if st.button("🔄 Obnovit databázi", type="primary", disabled=not _confirm):
+                _data = _uploaded.read()
+                if _data[:16] == b"SQLite format 3\x00":
+                    # Záloha před obnovením
+                    _do_backup("pre_restore")
+                    with open(DB_PATH, "wb") as _fout:
+                        _fout.write(_data)
+                    st.success("✅ Databáze obnovena (automatická záloha před obnovením byla uložena). Odhlaste se a přihlaste znovu.")
+                else:
+                    st.error("❌ Soubor není platná SQLite databáze.")
+
+        st.markdown("---")
+        st.markdown("#### 📊 Statistiky databáze")
+        if DB_PATH.exists():
+            with get_conn() as _sc:
+                _stat_cols = st.columns(5)
+                for _ci, (_tbl, _lbl) in enumerate([
+                    ("users","Uživatelé"), ("attendance","Záznamy"),
+                    ("absences","Absence"), ("time_corrections","Žádosti"),
+                    ("leave_funds","Fondy")
+                ]):
+                    try:
+                        _stat_cols[_ci].metric(_lbl, _sc.execute(f"SELECT COUNT(*) FROM {_tbl}").fetchone()[0])
+                    except Exception:
+                        pass
+
+    # ── Tab 8: Přímá editace docházky ───────────────────────
+    with tab8:
+        st.markdown("### ✏️ Přímá editace docházky")
+        st.caption("Administrátor může přímo upravit nebo vytvořit záznam docházky bez žádosti zaměstnance.")
+
+        _eu = get_all_users()
+        _eu_map = {u["id"]: u["display_name"] for u in _eu}
+        _sel_uid = st.selectbox(
+            "Zaměstnanec", [u["id"] for u in _eu],
+            format_func=lambda x: _eu_map[x], key="edit_att_uid"
+        )
+        _sel_day = st.date_input(
+            "Datum", value=cet_today(), key="edit_att_day", format="DD.MM.YYYY"
+        )
+
+        # Načti existující záznam
+        _att = get_attendance(_sel_uid, _sel_day.isoformat())
+        _att_dict = dict(_att) if _att else {}
+        _pauses   = get_pauses(_att["id"]) if _att else []
+
+        # Zobraz stávající data
+        if _att_dict:
+            st.markdown(
+                f"<div style='background:#f0f9ff;border-left:4px solid #1d4ed8;border-radius:8px;"
+                f"padding:10px 14px;margin-bottom:12px;font-size:13px'>"
+                f"📋 Stávající záznam: příchod <strong>{_att_dict.get('checkin_time','—')}</strong>"
+                f", odchod <strong>{_att_dict.get('checkout_time','—')}</strong>"
+                + (f", {len(_pauses)} pauza/pauz" if _pauses else "")
+                + "</div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.caption("Pro tento den neexistuje žádný záznam – vyplněním formuláře ho vytvoříte.")
+
+        # ── Formulář příchod / odchod ──────────────────────────
+        st.markdown("**Příchod a odchod**")
+        _fc1, _fc2 = st.columns(2)
+        with _fc1:
+            _new_in  = st.text_input("Příchod (HH:MM)", value=_att_dict.get("checkin_time", "") or "",
+                                     placeholder="07:30", key="edit_att_in")
+        with _fc2:
+            _new_out = st.text_input("Odchod (HH:MM)", value=_att_dict.get("checkout_time", "") or "",
+                                     placeholder="16:00", key="edit_att_out")
+
+        _edit_note = st.text_input("Poznámka k úpravě (interní)", key="edit_att_note", placeholder="Oprava záznamu, zapomenutý příchod…")
+
+        def _valid_time(t):
+            if not t: return True
+            import re as _re
+            return bool(_re.match(r"^\d{1,2}:\d{2}$", t.strip()))
+
+        _save_ok = _valid_time(_new_in) and _valid_time(_new_out)
+        if not _save_ok:
+            st.error("Čas musí být ve formátu HH:MM (např. 07:30).")
+
+        if st.button("💾 Uložit příchod/odchod", type="primary", disabled=not _save_ok, key="save_edit_att"):
+            _cin  = (_sel_day.isoformat() + " " + _new_in.strip())  if _new_in.strip()  else None
+            _cout = (_sel_day.isoformat() + " " + _new_out.strip()) if _new_out.strip() else None
+            admin_set_attendance(_sel_uid, _sel_day.isoformat(), _cin, _cout)
+            st.success(f"✅ Záznam pro {_eu_map[_sel_uid]} dne {_sel_day.strftime('%d.%m.%Y')} uložen.")
+            st.rerun()
+
+        # ── Správa pauz ────────────────────────────────────────
+        if _att:
+            st.markdown("---")
+            st.markdown("**Pauzy**")
+            if _pauses:
+                for _p in _pauses:
+                    _pcols = st.columns([2, 2, 2, 1])
+                    _pcols[0].markdown(f"<small style='color:#64748b'>{_p['pause_type']}</small>", unsafe_allow_html=True)
+                    _pcols[1].markdown(f"<small>začátek: <strong>{_p['start_time']}</strong></small>", unsafe_allow_html=True)
+                    _pcols[2].markdown(f"<small>konec: <strong>{_p.get('end_time') or '—'}</strong></small>", unsafe_allow_html=True)
+                    if _pcols[3].button("🗑", key=f"del_p_{_p['id']}", help="Smazat pauzu"):
+                        admin_delete_pause(_p["id"])
+                        st.rerun()
+            else:
+                st.caption("Žádné pauzy.")
+
+            # Přidat novou pauzu
+            with st.expander("➕ Přidat pauzu"):
+                _pp1, _pp2, _pp3 = st.columns(3)
+                with _pp1:
+                    _p_type = st.selectbox("Typ", ["oběd", "přestávka", "jiné"], key="new_pause_type")
+                with _pp2:
+                    _p_start = st.text_input("Začátek (HH:MM)", placeholder="12:00", key="new_pause_start")
+                with _pp3:
+                    _p_end   = st.text_input("Konec (HH:MM)", placeholder="12:30", key="new_pause_end")
+                if st.button("Přidat pauzu", key="add_pause_btn"):
+                    if _valid_time(_p_start) and _p_start.strip():
+                        _ps = _sel_day.isoformat() + " " + _p_start.strip()
+                        _pe = (_sel_day.isoformat() + " " + _p_end.strip()) if _p_end.strip() else None
+                        admin_set_pause(_att["id"], _p_type, _ps, _pe)
+                        st.success("Pauza přidána ✓")
+                        st.rerun()
+                    else:
+                        st.error("Zadejte platný čas začátku.")
+
+        # ── Smazání celého záznamu ─────────────────────────────
+        if _att:
+            st.markdown("---")
+            with st.expander("⚠️ Smazat celý záznam"):
+                st.warning(f"Smaže příchod, odchod i všechny pauzy pro {_eu_map[_sel_uid]} dne {_sel_day.strftime('%d.%m.%Y')}.")
+                if st.button("🗑 Smazat záznam", type="primary", key="del_att_btn"):
+                    admin_clear_attendance(_sel_uid, _sel_day.isoformat())
+                    st.success("Záznam smazán.")
+                    st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -2233,82 +2653,120 @@ def page_calendar():
 
 def inject_czech_datepicker():
     """
-    Přejmenuje anglické názvy dnů a měsíců na české přes MutationObserver
-    a přesune neděli na konec řádku (týden začíná pondělím).
+    Opraví Streamlit Base-Web kalendář: české názvy dní/měsíců,
+    týden začíná pondělím (neděle přesunuta na konec).
     """
+    # CSS injektovaný přes st.markdown – funguje spolehlivě
+    st.markdown("""
+    <style>
+    /* Streamlit Base-Web datepicker – pondělí jako první den */
+    [data-baseweb="calendar"] [role="row"] {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # JS přes components iframe – targetuje Base-Web selektory
     _components.html("""
     <script>
-    (function() {
-        const DAY_MAP  = {'Su':'Ne','Mo':'Po','Tu':'Út','We':'St','Th':'Čt','Fr':'Pá','Sa':'So'};
-        const MONTH_MAP = {
-            'January':'leden','February':'únor','March':'březen','April':'duben',
-            'May':'květen','June':'červen','July':'červenec','August':'srpen',
-            'September':'září','October':'říjen','November':'listopad','December':'prosinec'
+    (function () {
+        var pdoc = window.parent ? window.parent.document : null;
+        if (!pdoc) return;
+
+        var CZ_DAYS = {
+            'Su': 'Ne', 'Mo': 'Po', 'Tu': 'Út',
+            'We': 'St', 'Th': 'Čt', 'Fr': 'Pá', 'Sa': 'So'
+        };
+        var CZ_MONTHS = {
+            'January':   'Leden',    'February':  'Únor',
+            'March':     'Březen', 'April':  'Duben',
+            'May':       'Květen', 'June':   'Červen',
+            'July':      'Červenec', 'August': 'Srpen',
+            'September': 'Září', 'October': 'Říjen',
+            'November':  'Listopad',  'December': 'Prosinec'
         };
 
-        function patch(root) {
-            // Přejmenuj zkratky dní
-            root.querySelectorAll(
-                '.react-datepicker__day-name, .stDatePicker__dayName, [data-testid="datepicker-day-name"]'
-            ).forEach(el => {
-                const t = el.textContent.trim();
-                if (DAY_MAP[t]) el.textContent = DAY_MAP[t];
-            });
-            // Přejmenuj měsíce v záhlaví
-            root.querySelectorAll(
-                '.react-datepicker__current-month, .stDatePicker__currentMonth, [data-testid="datepicker-current-month"]'
-            ).forEach(el => {
-                let txt = el.textContent;
-                for (const [en, cz] of Object.entries(MONTH_MAP)) {
-                    txt = txt.replace(en, cz.charAt(0).toUpperCase() + cz.slice(1));
+        function patchText(el, map) {
+            var t = el.textContent.trim();
+            if (map[t] !== undefined) {
+                el.textContent = map[t];
+                return true;
+            }
+            return false;
+        }
+
+        function patchMonthInText(el) {
+            var t = el.textContent;
+            var changed = false;
+            for (var en in CZ_MONTHS) {
+                if (t.indexOf(en) !== -1) {
+                    t = t.replace(en, CZ_MONTHS[en]);
+                    changed = true;
+                    break;
                 }
-                if (txt !== el.textContent) el.textContent = txt;
-            });
-            // Přejmenuj měsíce v dropdown
-            root.querySelectorAll(
-                '.react-datepicker__month-select option, .react-datepicker__month-option'
-            ).forEach(el => {
-                const txt = el.textContent.trim();
-                if (MONTH_MAP[txt]) el.textContent = MONTH_MAP[txt].charAt(0).toUpperCase() + MONTH_MAP[txt].slice(1);
-            });
+            }
+            if (changed) el.textContent = t;
         }
 
-        // CSS: neděle (první div) přesuň na konec pomocí flex order
-        const style = window.parent.document.createElement('style');
-        style.id = 'czech-calendar-css';
-        style.textContent = `
-            /* Týden začíná pondělím – neděle přesunuta na konec */
-            .react-datepicker__day-names,
-            .react-datepicker__week {
-                display: flex !important;
+        function moveSundayToEnd(row) {
+            var cells = row.children;
+            if (cells.length !== 7) return;
+            var first = cells[0];
+            var lbl = first.getAttribute('aria-label') || '';
+            var txt = first.textContent.trim();
+            /* Přesuň pouze pokud je to neděle (Su / Ne / Sunday) */
+            if (txt === 'Su' || txt === 'Ne' || lbl === 'Sunday') {
+                row.appendChild(first);
             }
-            .react-datepicker__day-names > div:first-child,
-            .react-datepicker__week > div:first-child {
-                order: 7 !important;
-            }
-            /* Zvýrazni víkend */
-            .react-datepicker__day--weekend {
-                color: #1f5e8c !important;
-                font-weight: 600 !important;
-            }
-        `;
-        if (!window.parent.document.getElementById('czech-calendar-css')) {
-            window.parent.document.head.appendChild(style);
         }
 
-        // MutationObserver – sleduj otevření kalendáře
-        const observer = new MutationObserver(() => patch(window.parent.document));
-        observer.observe(window.parent.document.body, { childList: true, subtree: true });
-        // První průchod
-        patch(window.parent.document);
+        function patch() {
+            /* 1. Záhlaví dní – Base Web používá role="columnheader" */
+            var dayHeaders = pdoc.querySelectorAll(
+                '[data-baseweb="calendar"] [role="columnheader"],' +
+                '[data-baseweb="datepicker"] [role="columnheader"]'
+            );
+            dayHeaders.forEach(function(el) { patchText(el, CZ_DAYS); });
+
+            /* 2. Nadpis měsíce a roku – tlačítko v hlavičce kalendáře */
+            var calBtns = pdoc.querySelectorAll(
+                '[data-baseweb="calendar"] button,' +
+                '[data-baseweb="datepicker"] button'
+            );
+            calBtns.forEach(patchMonthInText);
+
+            /* 3. Dropdown možnosti měsíce (Base Web select) */
+            var opts = pdoc.querySelectorAll(
+                '[data-baseweb="menu"] [role="option"],' +
+                '[data-baseweb="select"] [role="option"]'
+            );
+            opts.forEach(function(el) { patchText(el, CZ_MONTHS); });
+
+            /* 4. Přesuň neděli na konec každého řádku */
+            var rows = pdoc.querySelectorAll(
+                '[data-baseweb="calendar"] [role="row"],' +
+                '[data-baseweb="datepicker"] [role="row"]'
+            );
+            rows.forEach(moveSundayToEnd);
+        }
+
+        /* Spusť hned a pak sleduj změny v DOM */
+        patch();
+        var obs = new MutationObserver(patch);
+        obs.observe(pdoc.body, { childList: true, subtree: true });
     })();
     </script>
     """, height=0, scrolling=False)
+
 
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 init_db()
+
+# Záloha při každém (re)startu aplikace
+_do_backup('startup')
 
 # Add email column to users if not exists (migration)
 with get_conn() as _conn:
@@ -2323,7 +2781,6 @@ if "user" not in st.session_state:
 else:
     user     = st.session_state.user
     is_admin = user["role"] == "admin"
-    inject_czech_datepicker()
 
     with st.sidebar:
         # ── Logo (modré – světlé pozadí sidebaru) ──
@@ -2390,6 +2847,9 @@ else:
             del st.session_state.user
             st.session_state.page = "dashboard"
             st.rerun()
+
+    # Injektuj českou lokalizaci kalendáře při každém renderu
+    inject_czech_datepicker()
 
     page = st.session_state.page
     if page == "dashboard":
