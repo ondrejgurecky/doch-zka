@@ -165,6 +165,7 @@ html, body, [class*="css"] {
 [data-testid="stSidebar"] .stButton > button {
     display: flex !important;
     align-items: center !important;
+    justify-content: flex-start !important;
     gap: 10px !important;
     width: 100% !important;
     background: transparent !important;
@@ -1570,17 +1571,26 @@ def page_my_attendance():
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Byl jsem u lékaře ────────────────────────────────
-    if att and att["checkin_time"] and not att["checkout_time"]:
-        att_pauses = get_pauses(att["id"])
-        open_p_doc = [p for p in att_pauses if p["end_time"] is None]
-        if not open_p_doc:
-            with st.expander("🏥 Byl/a jsem dnes u lékaře"):
-                st.caption("Zaznamená placenou pauzu Lékař od 9:00 do aktuálního času. "
-                           "Tato pauza se NEPOČÍTÁ jako ztráta z pracovní doby.")
-                _doc_from = st.time_input("Odchod k lékaři od", value=time(9, 0), key="doc_from_time")
-                if st.button("✅ Zaznamenat návštěvu lékaře", key="doc_btn"):
-                    _doc_start = cet_today().isoformat() + " " + _doc_from.strftime("%H:%M:%S")
+    # ── Lékař ─────────────────────────────────────────────
+    if att and att["checkin_time"]:
+        att_pauses_doc = get_pauses(att["id"])
+        open_p_doc     = [p for p in att_pauses_doc if p["end_time"] is None]
+        has_doc_pause  = any("Lékař" in (p.get("pause_type") or "") for p in att_pauses_doc)
+        with st.expander("🏥 Lékař / zdravotní návštěva"):
+            st.caption("Placená pauza – **nepočítá se jako ztráta** z pracovní doby ani fondu hodin.")
+            _doc_mode = st.radio(
+                "Typ záznamu",
+                ["🕐 Právě přicházím z lékaře", "⏸ Odcházím k lékaři teď", "📅 Celý den u lékaře (8 h)"],
+                key="doc_mode", horizontal=True
+            )
+
+            if _doc_mode == "🕐 Právě přicházím z lékaře":
+                st.caption("Zaznamená placenou pauzu od zadaného odchodu **do teď** (= příchod z lékaře).")
+                _doc_from_t = st.time_input("Odešel/a jsem k lékaři v", value=time(9, 0), key="doc_from_time2")
+                if open_p_doc:
+                    st.warning("Nejprve ukončete probíhající pauzu.")
+                elif st.button("✅ Přišel/a jsem z lékaře", key="doc_btn2"):
+                    _doc_start = cet_today().isoformat() + " " + _doc_from_t.strftime("%H:%M:%S")
                     _doc_end   = now_str()
                     with get_conn() as _dc:
                         _dc.execute(
@@ -1589,7 +1599,59 @@ def page_my_attendance():
                             (att["id"], "🏥 Lékař (placená pauza)", _doc_start, _doc_end)
                         )
                         _dc.commit()
-                    st.success(f"Návštěva lékaře zaznamenána ({_doc_from.strftime("%H:%M")} – {_doc_end[11:16]}) ✓")
+                    st.success(f"Lékař zaznamenán: {_doc_from_t.strftime('%H:%M')} – {_doc_end[11:16]} 💚")
+                    st.rerun()
+
+            elif _doc_mode == "⏸ Odcházím k lékaři teď":
+                st.caption("Spustí placenou pauzu **od teď**. Ukončíte ji tlačítkem **Ukončit pauzu** po návratu.")
+                if open_p_doc:
+                    st.info(f"Probíhá pauza: {open_p_doc[0]['pause_type']} od {open_p_doc[0]['start_time'][11:16]}. Ukončete ji výše.")
+                elif st.button("▶ Odcházím k lékaři", key="doc_btn_start"):
+                    with get_conn() as _dc:
+                        _dc.execute(
+                            "INSERT INTO pauses(attendance_id,pause_type,start_time,paid)"
+                            " VALUES(?,?,?,1)",
+                            (att["id"], "🏥 Lékař (placená pauza)", now_str())
+                        )
+                        _dc.commit()
+                    st.success("Pauza – lékař zahájena 💚")
+                    st.rerun()
+
+            elif _doc_mode == "📅 Celý den u lékaře (8 h)":
+                st.caption(
+                    "Zaznamená příchod 8:00, placenou pauzu 8:00–16:00 a odchod 16:00. "
+                    "Fond pracovní doby se **nesnižuje** – pauza je placená."
+                )
+                if has_doc_pause:
+                    st.info("Dnešní lékařská pauza je již zaznamenána.")
+                elif st.button("📅 Zaznamenat celý den u lékaře", key="doc_btn_allday"):
+                    _today_iso = cet_today().isoformat()
+                    _cin  = _today_iso + " 08:00:00"
+                    _cout = _today_iso + " 16:00:00"
+                    with get_conn() as _dc:
+                        _row = _dc.execute(
+                            "SELECT id, checkin_time, checkout_time FROM attendance WHERE user_id=? AND date=?",
+                            (user["id"], _today_iso)
+                        ).fetchone()
+                        if _row:
+                            _att_id = _row["id"]
+                            if not _row["checkin_time"]:
+                                _dc.execute("UPDATE attendance SET checkin_time=? WHERE id=?", (_cin, _att_id))
+                            if not _row["checkout_time"]:
+                                _dc.execute("UPDATE attendance SET checkout_time=? WHERE id=?", (_cout, _att_id))
+                        else:
+                            _cur = _dc.execute(
+                                "INSERT INTO attendance(user_id,date,checkin_time,checkout_time) VALUES(?,?,?,?)",
+                                (user["id"], _today_iso, _cin, _cout)
+                            )
+                            _att_id = _cur.lastrowid
+                        _dc.execute(
+                            "INSERT INTO pauses(attendance_id,pause_type,start_time,end_time,paid)"
+                            " VALUES(?,?,?,?,1)",
+                            (_att_id, "🏥 Lékař – celý den (placená)", _cin, _cout)
+                        )
+                        _dc.commit()
+                    st.success("Celý den u lékaře zaznamenán – 8 h v pracovní době 💚")
                     st.rerun()
 
     if att:
