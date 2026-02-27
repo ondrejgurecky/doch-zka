@@ -81,47 +81,77 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-/* ── Tokens – shodné s JSX ──────────────────── */
+/* ═══════════════════════════════════════════════
+   1.  HIDE ALL STREAMLIT CHROME
+   ═══════════════════════════════════════════════ */
+#MainMenu, header[data-testid="stHeader"],
+footer, [data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+button[title="View fullscreen"],
+.stDeployButton { display: none !important; visibility: hidden !important; }
+
+/* Remove top padding left by hidden header */
+.main > div:first-child { padding-top: 0 !important; }
+.block-container { padding-top: 0 !important; padding-bottom: 2rem !important; }
+
+/* ═══════════════════════════════════════════════
+   2.  DESIGN TOKENS  (identical to JSX)
+   ═══════════════════════════════════════════════ */
 :root {
-    --primary:   #1f5e8c;
-    --primary-d: #0b5390;
-    --bright:    #158bc8;
-    --gradient:  linear-gradient(120deg, #0b5390 0%, #158bc8 81%);
-    --white:     #ffffff;
-    --bg:        #f8fafc;          /* slate-50 */
-    --border:    #e2e8f0;          /* slate-200 */
-    --text-dark: #1e293b;
-    --text-body: #475569;
-    --text-muted:#64748b;
-    --radius-sm: 8px;
-    --radius:    14px;
-    --shadow:    0 1px 4px rgba(31,94,140,.07);
-    --shadow-md: 0 4px 12px rgba(31,94,140,.10);
-    /* semantic */
-    --green:     #065f46;
-    --green-bg:  #d1fae5;
-    --red:       #991b1b;
-    --red-bg:    #fee2e2;
-    --orange:    #92400e;
-    --orange-bg: #fef3c7;
-    --blue-bg:   #e0f2fe;
+    --primary:    #1f5e8c;
+    --primary-d:  #0b5390;
+    --bright:     #158bc8;
+    --gradient:   linear-gradient(120deg, #0b5390 0%, #158bc8 81%);
+    --white:      #ffffff;
+    --bg:         #f8fafc;
+    --border:     #e2e8f0;
+    --text-dark:  #1e293b;
+    --text-body:  #475569;
+    --text-muted: #64748b;
+    --green:      #065f46;
+    --green-bg:   #d1fae5;
+    --red:        #991b1b;
+    --red-bg:     #fee2e2;
+    --orange:     #92400e;
+    --orange-bg:  #fef3c7;
+    --blue-bg:    #e0f2fe;
+    --r:          8px;
+    --R:          14px;
+    --sh:         0 1px 4px rgba(31,94,140,.07);
 }
 
-/* ── Base ───────────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   3.  BASE
+   ═══════════════════════════════════════════════ */
 html, body, [class*="css"] {
     font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
     -webkit-font-smoothing: antialiased !important;
-    color: var(--text-body) !important;
 }
 .stApp { background: var(--bg) !important; }
-.main .block-container { padding-top: 1.5rem; max-width: 1320px; }
 
-/* ── Sidebar ────────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   4.  SIDEBAR  – matches JSX <aside>
+       width 240px, white, border-right
+   ═══════════════════════════════════════════════ */
 [data-testid="stSidebar"] {
     background: var(--white) !important;
     border-right: 1px solid var(--border) !important;
+    min-width: 240px !important;
+    max-width: 240px !important;
+    padding: 0 !important;
 }
-[data-testid="stSidebar"] * { color: var(--text-body) !important; }
+/* Remove inner Streamlit padding */
+[data-testid="stSidebar"] > div:first-child {
+    padding: 0 !important;
+}
+[data-testid="stSidebar"] .block-container {
+    padding: 0 !important;
+}
+/* Collapse arrow – hide it */
+[data-testid="stSidebarCollapseButton"] { display: none !important; }
+
+/* Nav buttons – match JSX sidebar buttons exactly */
 [data-testid="stSidebar"] .stButton > button {
     display: flex !important;
     align-items: center !important;
@@ -135,145 +165,148 @@ html, body, [class*="css"] {
     font-size: .875rem !important;
     font-weight: 600 !important;
     padding: 10px 14px !important;
-    margin-bottom: 2px !important;
-    transition: all .15s !important;
+    margin-bottom: 4px !important;
+    transition: background .15s, color .15s !important;
+    box-shadow: none !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
     background: var(--bg) !important;
     color: var(--text-dark) !important;
 }
-/* Active nav item */
+/* Active = kind="primary" */
 [data-testid="stSidebar"] .stButton > button[kind="primary"] {
     background: #e8f4fd !important;
     color: var(--primary) !important;
     font-weight: 700 !important;
 }
 
-/* ── Page section header (gradient banner) ─── */
+/* ═══════════════════════════════════════════════
+   5.  MAIN CONTENT  –  strip Streamlit padding
+   ═══════════════════════════════════════════════ */
+.main .block-container,
+[data-testid="stAppViewContainer"] > section > div,
+section.main > div:first-child {
+    max-width: 100% !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+/* Streamlit sometimes uses these selectors */
+div[data-testid="stVerticalBlock"] > div > div > div {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+
+/* ═══════════════════════════════════════════════
+   6.  PAGE SECTION HEADER  (JSX SectionHeader)
+       Full-width, no rounded corners – exact match
+   ═══════════════════════════════════════════════ */
 .page-header {
     background: var(--gradient);
-    border-radius: var(--radius);
-    padding: 28px 36px;
-    margin-bottom: 28px;
+    padding: 40px 48px 32px;
+    margin-bottom: 0;
     position: relative;
     overflow: hidden;
-}
-.page-header::after {
-    content: '';
-    position: absolute;
-    top: -60px; right: -60px;
-    width: 240px; height: 240px;
-    background: rgba(255,255,255,.05);
-    border-radius: 50%;
-    pointer-events: none;
 }
 .page-header h1 {
     font-size: 1.625rem !important;
     font-weight: 800 !important;
     color: #fff !important;
-    margin: 0 0 4px !important;
+    margin: 0 0 6px !important;
     line-height: 1.2 !important;
     letter-spacing: -.3px !important;
 }
-.page-header p { font-size: .875rem; color: rgba(255,255,255,.75); margin: 0; }
+.page-header p { font-size: .875rem; color: rgba(255,255,255,.8); margin: 0; }
 
-/* ── Cards ─────────────────────────────────── */
+/* Content padding  –  mirrors JSX  padding: 32px 48px */
+.content-pad { padding: 32px 48px; }
+
+/* ═══════════════════════════════════════════════
+   7.  CARDS  (JSX Card component)
+   ═══════════════════════════════════════════════ */
 .card {
     background: var(--white);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--R);
     padding: 20px 24px;
     margin-bottom: 14px;
-    box-shadow: var(--shadow);
+    box-shadow: var(--sh);
 }
-/* Coloured left accent – kept for stat cards */
 .card-green  { border-left: 4px solid #059669; }
 .card-yellow { border-left: 4px solid #d97706; }
 .card-red    { border-left: 4px solid #dc2626; }
 .card-blue   { border-left: 4px solid var(--primary); }
 .card-gray   { border-left: 4px solid #94a3b8; }
-
 .card h3 {
-    margin: 0 0 6px;
-    font-size: .7rem;
-    color: var(--text-muted);
-    font-weight: 700;
-    letter-spacing: .08em;
-    text-transform: uppercase;
+    margin: 0 0 6px; font-size: .7rem; color: var(--text-muted);
+    font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
 }
 .card .value {
-    font-size: 1.875rem;
-    font-weight: 800;
-    color: var(--text-dark);
-    font-variant-numeric: tabular-nums;
-    line-height: 1.1;
+    font-size: 1.875rem; font-weight: 800; color: var(--text-dark);
+    font-variant-numeric: tabular-nums; line-height: 1.1;
 }
 .card .sub { font-size: .75rem; color: var(--text-muted); margin-top: 4px; }
 
-/* ── Status / request badges ─────────────────  */
+/* ═══════════════════════════════════════════════
+   8.  BADGES  (JSX Badge)
+   ═══════════════════════════════════════════════ */
 .badge {
-    display: inline-block;
-    padding: 2px 9px;
-    border-radius: 6px;
-    font-size: .7rem;
-    font-weight: 700;
-    letter-spacing: .03em;
+    display: inline-block; padding: 2px 8px;
+    border-radius: 6px; font-size: .6875rem; font-weight: 700;
 }
 .badge-working  { background: var(--green-bg);  color: var(--green); }
 .badge-pause    { background: var(--orange-bg); color: var(--orange); }
 .badge-sick     { background: var(--red-bg);    color: var(--red); }
 .badge-vacation { background: var(--blue-bg);   color: var(--primary); }
-.badge-offline  { background: #f1f5f9;          color: #475569; }
+.badge-offline  { background: #f1f5f9;          color: #64748b; }
 .badge-pending  { background: var(--orange-bg); color: var(--orange); }
 .badge-approved { background: var(--green-bg);  color: var(--green); }
 .badge-rejected { background: var(--red-bg);    color: var(--red); }
 
-/* ── Person rows ────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   9.  PERSON ROWS
+   ═══════════════════════════════════════════════ */
 .person-row {
-    display: flex;
-    align-items: center;
-    gap: 14px;
+    display: flex; align-items: center; gap: 14px;
     padding: 12px 18px;
-    background: var(--white);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-bottom: 8px;
-    box-shadow: var(--shadow);
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: var(--R); margin-bottom: 8px; box-shadow: var(--sh);
 }
 .avatar {
-    width: 40px; height: 40px;
-    border-radius: 50%;
+    width: 40px; height: 40px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: .95rem; flex-shrink: 0;
+    font-weight: 800; font-size: .9rem; flex-shrink: 0;
 }
 .person-row .name   { font-weight: 700; font-size: .9rem;  color: var(--text-dark); }
 .person-row .detail { font-size: .76rem; color: var(--text-muted); }
 
-/* ── Buttons (global) ───────────────────────── */
+/* ═══════════════════════════════════════════════
+   10.  GLOBAL BUTTONS  (JSX Btn)
+   ═══════════════════════════════════════════════ */
 .stButton > button {
     background: var(--white) !important;
     color: var(--primary) !important;
     border: 1.5px solid var(--border) !important;
-    border-radius: var(--radius-sm) !important;
+    border-radius: var(--r) !important;
     font-family: 'Inter', sans-serif !important;
     font-weight: 600 !important;
     font-size: .875rem !important;
+    padding: 8px 18px !important;
     transition: all .15s !important;
+    box-shadow: none !important;
 }
 .stButton > button:hover {
     background: var(--bg) !important;
     border-color: var(--primary) !important;
 }
-/* primary = gradient */
+/* Primary = gradient  */
 .stButton > button[kind="primary"] {
     background: var(--gradient) !important;
     color: #fff !important;
     border: none !important;
 }
-.stButton > button[kind="primary"]:hover {
-    opacity: .9 !important;
-}
-/* coloured helper wrappers */
+.stButton > button[kind="primary"]:hover { opacity: .92 !important; }
+
+/* Coloured variants */
 .btn-green  > button { background: var(--green-bg)  !important; color: var(--green)  !important; border-color: #6ee7b7 !important; }
 .btn-red    > button { background: var(--red-bg)    !important; color: var(--red)    !important; border-color: #fca5a5 !important; }
 .btn-yellow > button { background: var(--orange-bg) !important; color: var(--orange) !important; border-color: #fcd34d !important; }
@@ -281,23 +314,27 @@ html, body, [class*="css"] {
 .btn-red    > button:hover { background: #fecaca !important; }
 .btn-yellow > button:hover { background: #fde68a !important; }
 
-/* ── Form inputs ────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   11.  FORM INPUTS
+   ═══════════════════════════════════════════════ */
 .stTextInput input,
-.stSelectbox > div,
+.stSelectbox > div[data-baseweb],
 .stDateInput input,
-.stTextArea textarea {
+.stTextArea textarea,
+.stNumberInput input {
     background: var(--white) !important;
     border: 1px solid var(--border) !important;
-    border-radius: var(--radius-sm) !important;
+    border-radius: var(--r) !important;
     color: var(--text-dark) !important;
     font-family: 'Inter', sans-serif !important;
     font-size: .875rem !important;
+    padding: 9px 12px !important;
 }
 .stTextInput input:focus,
-.stSelectbox > div:focus-within,
 .stTextArea textarea:focus {
     border-color: var(--primary) !important;
     box-shadow: 0 0 0 3px rgba(31,94,140,.1) !important;
+    outline: none !important;
 }
 label,
 .stSelectbox label, .stTextInput label,
@@ -307,20 +344,21 @@ label,
     font-size: .8125rem !important;
 }
 
-/* ── Tabs ───────────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   12.  TABS
+   ═══════════════════════════════════════════════ */
 .stTabs [data-baseweb="tab-list"] {
     background: transparent !important;
     border-bottom: 1px solid var(--border) !important;
     gap: 0 !important;
+    margin-bottom: 20px !important;
 }
 .stTabs [data-baseweb="tab"] {
     background: transparent !important;
     color: var(--text-muted) !important;
-    font-weight: 600 !important;
-    font-size: .875rem !important;
+    font-weight: 600 !important; font-size: .875rem !important;
     border-bottom: 2px solid transparent !important;
-    padding: 10px 18px !important;
-    margin-bottom: -1px !important;
+    padding: 10px 18px !important; margin-bottom: -1px !important;
 }
 .stTabs [aria-selected="true"] {
     color: var(--primary) !important;
@@ -328,61 +366,102 @@ label,
     background: transparent !important;
 }
 
-/* ── Dataframe ──────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   13.  TABLE / DATAFRAME
+   ═══════════════════════════════════════════════ */
 .stDataFrame {
     border: 1px solid var(--border) !important;
-    border-radius: var(--radius) !important;
+    border-radius: var(--R) !important;
     overflow: hidden !important;
-    box-shadow: var(--shadow) !important;
+    box-shadow: var(--sh) !important;
 }
 
-/* ── Alerts ─────────────────────────────────── */
-.stSuccess { background: var(--green-bg) !important; color: var(--green) !important; border-radius: var(--radius-sm) !important; }
-.stInfo    { background: var(--blue-bg)  !important; color: var(--primary) !important; border-radius: var(--radius-sm) !important; }
-.stWarning { background: var(--orange-bg)!important; color: var(--orange) !important; border-radius: var(--radius-sm) !important; }
-.stError   { background: var(--red-bg)   !important; color: var(--red)    !important; border-radius: var(--radius-sm) !important; }
+/* ═══════════════════════════════════════════════
+   14.  ALERTS
+   ═══════════════════════════════════════════════ */
+div[data-testid="stAlert"] {
+    border-radius: var(--r) !important;
+    font-size: .875rem !important;
+    font-family: 'Inter', sans-serif !important;
+}
+.stSuccess, [data-testid="stAlert"][kind="success"] {
+    background: var(--green-bg) !important; color: var(--green) !important;
+}
+.stInfo, [data-testid="stAlert"][kind="info"] {
+    background: var(--blue-bg) !important; color: var(--primary) !important;
+}
+.stWarning, [data-testid="stAlert"][kind="warning"] {
+    background: var(--orange-bg) !important; color: var(--orange) !important;
+}
+.stError, [data-testid="stAlert"][kind="error"] {
+    background: var(--red-bg) !important; color: var(--red) !important;
+}
 
-/* ── Expander ───────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   15.  EXPANDER
+   ═══════════════════════════════════════════════ */
+details summary,
 .streamlit-expanderHeader {
     background: var(--white) !important;
     border: 1px solid var(--border) !important;
-    border-radius: var(--radius-sm) !important;
+    border-radius: var(--r) !important;
     color: var(--text-dark) !important;
-    font-weight: 700 !important;
-    font-size: .875rem !important;
+    font-weight: 700 !important; font-size: .875rem !important;
+    padding: 12px 16px !important;
 }
 
-/* ── Misc ───────────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   16.  MISC
+   ═══════════════════════════════════════════════ */
 hr { border-color: var(--border) !important; }
-.sidebar-divider { height: 1px; background: var(--border); margin: 12px 0; }
+.sidebar-divider { height: 1px; background: var(--border); margin: 10px 0; }
 
-/* Stat number pull-out (JSX style) */
-.stat-val {
-    font-size: 2rem;
+/* ── Inline table rows (JSX-style) ── */
+.row-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .8125rem;
+}
+.row-table th {
+    padding: 10px 16px;
+    text-align: left;
+    font-size: .6875rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    background: #f8fafc;
+}
+.row-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid #f1f5f9;
+    color: var(--text-body);
+}
+.row-table tr:last-child td { border-bottom: none; }
+.row-table tr:nth-child(even) td { background: #f8fafc; }
+
+/* ── Clock big number ── */
+.clock-big {
+    font-size: 2.25rem;
     font-weight: 800;
     color: var(--primary);
     font-variant-numeric: tabular-nums;
     letter-spacing: -1px;
     line-height: 1;
 }
-.stat-label {
-    font-size: .6875rem;
-    font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .06em;
-    margin-bottom: 4px;
+.clock-label {
+    font-size: .6875rem; font-weight: 700;
+    color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: .08em; margin-bottom: 4px;
 }
-.stat-sub { font-size: .75rem; color: var(--text-muted); margin-top: 6px; }
 
-/* Clock widget inner block */
-.clock-block {
-    background: #f0f7ff;
-    border-radius: 10px;
-    padding: 12px 20px;
-    display: inline-block;
-    text-align: center;
+/* ── Inline section title (not a full banner) ── */
+.section-title {
+    font-size: .9375rem; font-weight: 700;
+    color: var(--text-dark); margin-bottom: 14px;
 }
+.divider { height: 1px; background: var(--border); margin: 24px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -896,7 +975,8 @@ def page_dashboard():
     st.markdown(f"""<div class="page-header">
         <h1>📊 Přehled dne</h1>
         <p>{today_cet.strftime("%-d. %-m. %Y")} · čas CET: {cet_now().strftime("%H:%M")}</p>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    <div class="content-pad">""", unsafe_allow_html=True)
 
     overview = get_status_overview()
     working  = [u for u in overview if u["status"] == "working"]
@@ -922,12 +1002,12 @@ def page_dashboard():
             <div class="value">{len(offline) + len(done)}</div>
             <div class="sub">{len(done)} skončilo dnes</div></div>""", unsafe_allow_html=True)
 
-    st.markdown("---")
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
     def render_group(title, users, show_checkin=False):
         if not users:
             return
-        st.markdown(f'<div style="font-size:.75rem;font-weight:700;color:#7a93ab;letter-spacing:.06em;text-transform:uppercase;margin:14px 0 8px">{title}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:.6875rem;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin:14px 0 8px">{title}</div>', unsafe_allow_html=True)
         for u in users:
             detail_str  = u["detail"] or ""
             checkin_str = f" · od {u['checkin']}" if show_checkin and u.get("checkin") else ""
@@ -950,6 +1030,8 @@ def page_dashboard():
         render_group("🔵 Dovolená", vacation)
         render_group("⚫ Skončili / Offline", done + offline)
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────
 # PAGE: MY ATTENDANCE
@@ -960,7 +1042,8 @@ def page_my_attendance():
     st.markdown(f"""<div class="page-header">
         <h1>🕐 Moje docházka</h1>
         <p>Dnes: {today_cet.strftime("%-d. %-m. %Y")} · {cet_now().strftime("%H:%M")} CET</p>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    <div class="content-pad">""", unsafe_allow_html=True)
 
     absences_today = get_absences_for_date()
     my_absence = next((a for a in absences_today if a["user_id"] == user["id"]), None)
@@ -1104,6 +1187,8 @@ def page_my_attendance():
             columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
         st.dataframe(df, use_container_width=True, hide_index=True)
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────
 # PAGE: ABSENCES
@@ -1113,7 +1198,8 @@ def page_absences():
     st.markdown("""<div class="page-header">
         <h1>🏖 Absence</h1>
         <p>Nahlášení dovolené nebo sickday – čeká na schválení administrátora</p>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    <div class="content-pad">""", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["➕ Nová žádost", "📋 Moje absence"])
 
@@ -1161,6 +1247,8 @@ def page_absences():
                     delete_absence(a["id"])
                     st.rerun()
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────
 # PAGE: TIME CORRECTIONS
@@ -1170,7 +1258,8 @@ def page_corrections():
     st.markdown("""<div class="page-header">
         <h1>✏️ Úpravy záznamu</h1>
         <p>Žádost o opravu příchodu, odchodu nebo pauzy – schvaluje administrátor</p>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    <div class="content-pad">""", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["➕ Nová žádost o úpravu", "📋 Moje žádosti"])
 
@@ -1221,13 +1310,15 @@ def page_corrections():
             st.markdown(f"""<div class="card">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start">
                     <div>
-                        <strong style="color:#1a2e4a">{c['date']}</strong>
-                        <span style="color:#3a5068"> · původně {orig_str} → požadováno {req_str}</span><br>
-                        <small style="color:#7a93ab">{c['reason']}</small>{admin_note_str}
+                        <strong style="color:#1e293b">{c['date']}</strong>
+                        <span style="color:#475569"> · původně {orig_str} → požadováno {req_str}</span><br>
+                        <small style="color:#64748b">{c['reason']}</small>{admin_note_str}
                     </div>
                     {correction_status_badge(c['status'])}
                 </div>
             </div>""", unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
@@ -1239,7 +1330,8 @@ def page_reports():
     st.markdown("""<div class="page-header">
         <h1>📈 Výkazy docházky</h1>
         <p>Měsíční přehled odpracovaných hodin</p>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    <div class="content-pad">""", unsafe_allow_html=True)
 
     today = cet_today()
     c1, c2, c3 = st.columns(3)
@@ -1319,6 +1411,8 @@ def page_reports():
                     columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
                 st.dataframe(df3, use_container_width=True, hide_index=True)
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────
 # PAGE: ADMIN
@@ -1327,7 +1421,8 @@ def page_admin():
     st.markdown("""<div class="page-header">
         <h1>⚙️ Správa</h1>
         <p>Uživatelé, schválení absencí a úprav docházky</p>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    <div class="content-pad">""", unsafe_allow_html=True)
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "👥 Uživatelé", "➕ Nový uživatel",
@@ -1536,6 +1631,8 @@ def page_admin():
                     resolve_correction(c["id"], False, admin_note)
                     st.rerun()
             st.markdown("---")
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
