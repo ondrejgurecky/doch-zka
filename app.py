@@ -532,13 +532,25 @@ def init_db():
             created_at TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id)
         );
+        CREATE TABLE IF NOT EXISTS leave_funds (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL,
+            year           INTEGER NOT NULL,
+            vacation_days  INTEGER DEFAULT 20,
+            vacation_carry INTEGER DEFAULT 0,
+            sickday_days   INTEGER DEFAULT 5,
+            UNIQUE(user_id, year),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
         """)
-        # email_sent column migration for existing DBs
-        try:
-            conn.execute("ALTER TABLE absences ADD COLUMN email_sent INTEGER DEFAULT 0")
-            conn.commit()
-        except Exception:
-            pass
+        for _migration in [
+            "ALTER TABLE absences ADD COLUMN email_sent INTEGER DEFAULT 0",
+        ]:
+            try:
+                conn.execute(_migration)
+                conn.commit()
+            except Exception:
+                pass
         # Seed admin
         row = conn.execute("SELECT id FROM users WHERE role='admin'").fetchone()
         if not row:
@@ -732,6 +744,105 @@ def update_nemoc_end(absence_id: int, date_to):
         )
         conn.commit()
 
+
+# ── Fondy dovolené / sickday ─────────────────────────────────────
+def ensure_leave_fund(user_id: int, year: int) -> dict:
+    """Vrátí (nebo vytvoří) fond pro uživatele+rok."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM leave_funds WHERE user_id=? AND year=?", (user_id, year)
+        ).fetchone()
+        if row:
+            return dict(row)
+        conn.execute(
+            "INSERT INTO leave_funds(user_id,year,vacation_days,vacation_carry,sickday_days)"
+            " VALUES(?,?,20,0,5)",
+            (user_id, year)
+        )
+        conn.commit()
+        return {"user_id": user_id, "year": year,
+                "vacation_days": 20, "vacation_carry": 0, "sickday_days": 5}
+
+
+def get_leave_fund(user_id: int, year: int) -> dict:
+    return ensure_leave_fund(user_id, year)
+
+
+def update_leave_fund(user_id: int, year: int,
+                      vacation_days: int = None,
+                      vacation_carry: int = None,
+                      sickday_days: int = None):
+    fund = ensure_leave_fund(user_id, year)
+    vd = vacation_days  if vacation_days  is not None else fund["vacation_days"]
+    vc = vacation_carry if vacation_carry is not None else fund["vacation_carry"]
+    sd = sickday_days   if sickday_days   is not None else fund["sickday_days"]
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE leave_funds SET vacation_days=?, vacation_carry=?, sickday_days=?"
+            " WHERE user_id=? AND year=?",
+            (vd, vc, sd, user_id, year)
+        )
+        conn.commit()
+
+
+def get_used_vacation(user_id: int, year: int) -> float:
+    """Čerpáno dní dovolené v roce (vacation_half = 0.5)."""
+    first = date(year, 1, 1)
+    last  = date(year, 12, 31)
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT absence_type, date_from, date_to FROM absences
+               WHERE user_id=? AND approved=1
+               AND absence_type IN ('vacation','vacation_half')
+               AND date_from >= ? AND date_to <= ?""",
+            (user_id, first.isoformat(), last.isoformat())
+        ).fetchall()
+    total = 0.0
+    for r in rows:
+        if r["absence_type"] == "vacation_half":
+            total += 0.5
+        else:
+            af = date.fromisoformat(r["date_from"])
+            at = date.fromisoformat(r["date_to"])
+            total += count_workdays_in_range(af, at)
+    return total
+
+
+def get_used_sickdays(user_id: int, year: int) -> int:
+    """Čerpáno sickday dní v roce."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT date_from, date_to FROM absences
+               WHERE user_id=? AND approved=1 AND absence_type='sickday'
+               AND date_from >= ? AND date_to <= ?""",
+            (user_id, date(year, 1, 1).isoformat(), date(year, 12, 31).isoformat())
+        ).fetchall()
+    total = 0
+    for r in rows:
+        af = date.fromisoformat(r["date_from"])
+        at = date.fromisoformat(r["date_to"])
+        total += count_workdays_in_range(af, at)
+    return total
+
+
+def leave_summary(user_id: int, year: int) -> dict:
+    """Kompletní přehled fondů a čerpání pro uživatele+rok."""
+    fund      = ensure_leave_fund(user_id, year)
+    used_vac  = get_used_vacation(user_id, year)
+    used_sick = get_used_sickdays(user_id, year)
+    total_vac = fund["vacation_days"] + fund["vacation_carry"]
+    return {
+        "vacation_total":  total_vac,
+        "vacation_used":   used_vac,
+        "vacation_remain": total_vac - used_vac,
+        "vacation_carry":  fund["vacation_carry"],
+        "vacation_base":   fund["vacation_days"],
+        "sickday_total":   fund["sickday_days"],
+        "sickday_used":    used_sick,
+        "sickday_remain":  fund["sickday_days"] - used_sick,
+    }
+
+
 def request_correction(user_id, d, orig_in, orig_out, orig_bs, orig_be,
                         req_in, req_out, req_bs, req_be, reason):
     with get_conn() as conn:
@@ -770,7 +881,7 @@ def resolve_correction(correction_id: int, approve: bool, admin_note: str = ""):
 
 # ── E-mail ──
 def send_absence_email(to_email: str, to_name: str, absence: dict) -> bool:
-    type_cz = {"vacation": "Dovolená", "nemoc": "Nemoc / PN", "sickday": "Sickday"}.get(absence["absence_type"], "Absence")
+    type_cz = {"vacation": "Dovolená", "vacation_half": "Dovolená (půlden)", "nemoc": "Nemoc / PN", "sickday": "Sickday"}.get(absence["absence_type"], "Absence")
     date_str = absence["date_from"] if absence["date_from"] == absence["date_to"] \
                else f"{absence['date_from']} – {absence['date_to']}"
     note_str = f"\nPoznámka: {absence['note']}" if absence.get("note") else ""
@@ -924,9 +1035,9 @@ def count_absence_workdays(user_id: int, year: int, month: int) -> int:
     return total
 
 
-def effective_workdays(user_id: int, year: int, month: int) -> int:
-    """Efektivní fond = pracovní dny měsíce − schválené absence."""
-    return max(0, count_workdays_so_far(year, month) - count_absence_workdays(user_id, year, month))
+def effective_workdays(user_id: int, year: int, month: int) -> float:
+    """Efektivní fond = pracovní dny měsíce − schválené absence (vacation_half = 0.5 dne)."""
+    return max(0.0, count_workdays_so_far(year, month) - count_absence_workdays(user_id, year, month))
 
 
 def get_all_absences_for_calendar(year: int, month: int):
@@ -938,7 +1049,7 @@ def get_all_absences_for_calendar(year: int, month: int):
             """SELECT a.*, u.display_name, u.color
                FROM absences a JOIN users u ON a.user_id = u.id
                WHERE a.approved=1
-               AND a.absence_type IN ('vacation','sickday','nemoc')
+               AND a.absence_type IN ('vacation','vacation_half','sickday','nemoc')
                AND a.date_to >= ? AND a.date_from <= ?
                ORDER BY a.date_from""",
             (first.isoformat(), last.isoformat())
@@ -1252,6 +1363,9 @@ def page_my_attendance():
     we_sec  = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
     diff    = wd_sec - expected_sec
 
+    fund_summ = leave_summary(user["id"], year)
+    vr = fund_summ["vacation_remain"]
+    sr = fund_summ["sickday_remain"]
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f"""<div class="card card-blue"><h3>Celkem odpracováno</h3>
@@ -1260,7 +1374,7 @@ def page_my_attendance():
     with c2:
         st.markdown(f"""<div class="card card-gray"><h3>Fond pracovní doby</h3>
             <div class="value" style="color:#3a5068">{seconds_to_hm(expected_sec)}</div>
-            <div class="sub">{eff_days} dní (−{absence_days} absence)</div></div>""", unsafe_allow_html=True)
+            <div class="sub">{eff_days:.1f} dní (−{absence_days:.1f} absence)</div></div>""", unsafe_allow_html=True)
     with c3:
         color    = "green" if diff >= 0 else "red"
         val_col  = "#145c38" if diff >= 0 else "#9b2116"
@@ -1276,6 +1390,18 @@ def page_my_attendance():
         st.markdown(f"""<div class="card card-{c}"><h3>Průměr / den</h3>
             <div class="value" style="color:{vc}">{seconds_to_hm(avg)}</div>
             <div class="sub">z {days_worked} dní</div></div>""", unsafe_allow_html=True)
+
+    vc2 = "green" if vr > 3 else "yellow" if vr > 0 else "red"
+    sc2 = "green" if sr > 1 else "yellow" if sr > 0 else "red"
+    f1, f2 = st.columns(2)
+    with f1:
+        st.markdown(f"""<div class="card card-{vc2}"><h3>🏖 Dovolená {year}</h3>
+            <div class="value" style="font-size:1.5rem">{vr:.1f} dní</div>
+            <div class="sub">zbývá z {fund_summ['vacation_total']} dní</div></div>""", unsafe_allow_html=True)
+    with f2:
+        st.markdown(f"""<div class="card card-{sc2}"><h3>🤒 Sickday {year}</h3>
+            <div class="value" style="font-size:1.5rem">{sr} dní</div>
+            <div class="sub">zbývá z {fund_summ['sickday_total']} dní</div></div>""", unsafe_allow_html=True)
 
     if stats:
         df = pd.DataFrame(stats)
@@ -1293,11 +1419,34 @@ def page_my_attendance():
 # ─────────────────────────────────────────────
 def page_absences():
     user = st.session_state.user
+    yr   = cet_today().year
+    summ = leave_summary(user["id"], yr)
     st.markdown("""<div class="page-header">
         <h1>🏖 Absence</h1>
         <p>Nahlášení dovolené, sickday nebo nemoci – čeká na schválení administrátora</p>
     </div>
     <div class="content-pad">""", unsafe_allow_html=True)
+
+    # ── Přehled fondů ──────────────────────────────────────────
+    vac_rem  = summ["vacation_remain"]
+    sick_rem = summ["sickday_remain"]
+    vac_color  = "green" if vac_rem  > 3  else "yellow" if vac_rem  > 0 else "red"
+    sick_color = "green" if sick_rem > 1  else "yellow" if sick_rem > 0 else "red"
+    carry_str  = f" (+{summ['vacation_carry']} převod)" if summ["vacation_carry"] else ""
+    st.markdown(f"""
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+      <div class="card card-{vac_color}">
+        <h3>🏖 Fond dovolené {yr}</h3>
+        <div class="value" style="font-size:1.5rem">{vac_rem:.1f} dní</div>
+        <div class="sub">z {summ['vacation_total']} dní (základ {summ['vacation_base']}{carry_str}) · čerpáno {summ['vacation_used']:.1f}</div>
+      </div>
+      <div class="card card-{sick_color}">
+        <h3>🤒 Fond sickday {yr}</h3>
+        <div class="value" style="font-size:1.5rem">{sick_rem} dní</div>
+        <div class="sub">z {summ['sickday_total']} dní · čerpáno {summ['sickday_used']}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     tab1, tab2, tab3 = st.tabs(["➕ Nová žádost", "🏁 Konec nemoci", "📋 Moje absence"])
 
@@ -1305,26 +1454,38 @@ def page_absences():
     with tab1:
         abs_type = st.selectbox(
             "Typ absence",
-            ["sickday", "nemoc", "vacation"],
+            ["sickday", "nemoc", "vacation", "vacation_half"],
             format_func=lambda x: {
-                "sickday":  "🤒 Sickday (jeden den)",
-                "nemoc":    "🏥 Nemoc / PN (více dní)",
-                "vacation": "🏖 Dovolená",
+                "sickday":       "🤒 Sickday (1 den z fondu)",
+                "nemoc":         "🏥 Nemoc / PN (více dní, nečerpá fond)",
+                "vacation":      "🏖 Dovolená – celý den / více dní",
+                "vacation_half": "🌅 Dovolená – půlden (0,5 dne)",
             }[x]
         )
 
         if abs_type == "sickday":
-            sick_date = st.date_input("Den nemoci", value=cet_today(),
+            if summ["sickday_remain"] <= 0:
+                st.warning(f"Nemáte žádný zbývající sickday (čerpáno {summ['sickday_used']}/{summ['sickday_total']}).")
+            sick_date = st.date_input("Den", value=cet_today(),
                                       min_value=cet_today() - timedelta(days=60))
             date_from = date_to = sick_date
 
         elif abs_type == "nemoc":
-            st.caption("Zadejte začátek nemoci. Konec lze doplnit později v záložce 'Konec nemoci'.")
+            st.caption("Zadejte začátek nemoci. Konec lze doplnit v záložce 'Konec nemoci'. Nemoc nečerpá fond.")
             date_from = st.date_input("Začátek nemoci", value=cet_today(),
                                       min_value=cet_today() - timedelta(days=90))
-            date_to = date_from   # konec se doplní dodatečně
+            date_to = date_from
+
+        elif abs_type == "vacation_half":
+            if summ["vacation_remain"] < 0.5:
+                st.warning(f"Nemáte dostatek dovolené (zbývá {summ['vacation_remain']:.1f} dní).")
+            date_from = st.date_input("Den půldne dovolené", value=cet_today())
+            date_to   = date_from
+            st.caption("Odečte 0,5 dne z fondu dovolené a zkrátí fond pracovní doby o 4 hodiny.")
 
         else:  # vacation
+            if summ["vacation_remain"] <= 0:
+                st.warning(f"Nemáte žádnou zbývající dovolenou (čerpáno {summ['vacation_used']:.1f}/{summ['vacation_total']} dní).")
             c1, c2 = st.columns(2)
             with c1:
                 date_from = st.date_input("Od", value=cet_today())
@@ -1334,7 +1495,7 @@ def page_absences():
         note = st.text_input("Poznámka (nepovinné)")
 
         if st.button("Odeslat žádost", type="primary"):
-            if abs_type != "nemoc" and date_to < date_from:
+            if abs_type not in ("nemoc", "vacation_half") and date_to < date_from:
                 st.error("Datum 'Do' musí být stejné nebo pozdější než 'Od'.")
             else:
                 request_absence(user["id"], abs_type, date_from, date_to, note)
@@ -1378,9 +1539,10 @@ def page_absences():
         if not absences:
             st.info("Žádné absence.")
         type_labels = {
-            "sickday":  "🤒 Sickday",
-            "nemoc":    "🏥 Nemoc / PN",
-            "vacation": "🏖 Dovolená",
+            "sickday":       "🤒 Sickday",
+            "nemoc":         "🏥 Nemoc / PN",
+            "vacation":      "🏖 Dovolená",
+            "vacation_half": "🌅 Dovolená půlden",
         }
         status_map = {0: ("⏳ Čeká na schválení", "yellow"), 1: ("✅ Schváleno", "green"), -1: ("❌ Zamítnuto", "red")}
         for a in absences:
@@ -1586,9 +1748,10 @@ def page_admin():
     </div>
     <div class="content-pad">""", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "👥 Uživatelé", "➕ Nový uživatel",
-        "🤒 Vložit nemoc", "✅ Schválení absencí", "✏️ Schválení úprav"
+        "🤒 Vložit nemoc", "✅ Schválení absencí", "✏️ Schválení úprav",
+        "📊 Fondy dovolené"
     ])
 
     # ── Tab 1: Users ──────────────────────────────────────
@@ -1728,7 +1891,7 @@ def page_admin():
         if not pending_abs:
             st.info("✅ Žádné čekající žádosti o absenci.")
 
-        type_labels = {"sickday": "🤒 Sickday", "nemoc": "🏥 Nemoc/PN", "vacation": "🏖 Dovolená"}
+        type_labels = {"sickday": "🤒 Sickday", "nemoc": "🏥 Nemoc/PN", "vacation": "🏖 Dovolená", "vacation_half": "🌅 Půlden"}
         for a in pending_abs:
             type_label = type_labels.get(a["absence_type"], a["absence_type"])
             date_str   = a["date_from"] if a["date_from"] == a["date_to"] else f"{a['date_from']} – {a['date_to']}"
@@ -1794,6 +1957,45 @@ def page_admin():
                     st.rerun()
             st.markdown("---")
 
+    # ── Tab 6: Fondy dovolené ──────────────────────────────
+    with tab6:
+        today_f   = cet_today()
+        yr_opts   = [today_f.year - 1, today_f.year, today_f.year + 1]
+        fund_year = st.selectbox("Rok", yr_opts, index=1, key="fund_year")
+        st.markdown("Upravte fond dovolené a počet sickday dní pro každého zaměstnance.")
+        all_users_f = get_all_users()
+        for u in all_users_f:
+            fund  = ensure_leave_fund(u["id"], fund_year)
+            used_v = get_used_vacation(u["id"], fund_year)
+            used_s = get_used_sickdays(u["id"], fund_year)
+            total_v = fund["vacation_days"] + fund["vacation_carry"]
+            initials = "".join(w[0].upper() for w in u["display_name"].split()[:2])
+            color = u.get("color") or "#1f5e8c"
+            st.markdown(f"""<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+              <div style="width:32px;height:32px;border-radius:16px;background:{color}22;color:{color};
+                border:2px solid {color}55;display:flex;align-items:center;justify-content:center;
+                font-weight:800;font-size:11px">{initials}</div>
+              <strong style="font-size:14px;color:#1e293b">{u['display_name']}</strong>
+              <span style="font-size:12px;color:#94a3b8">
+                🏖 {used_v:.1f}/{total_v} dní &nbsp;·&nbsp; 🤒 {used_s}/{fund['sickday_days']} sickday
+              </span></div>""", unsafe_allow_html=True)
+            with st.expander(f"Upravit fond – {u['display_name']}"):
+                fc1, fc2, fc3 = st.columns(3)
+                with fc1:
+                    vd = st.number_input("Základní dovolená (dny)", min_value=0, max_value=60,
+                                         value=fund["vacation_days"], key=f"vd_{u['id']}_{fund_year}")
+                with fc2:
+                    vc = st.number_input("Převod z minulého roku (dny)", min_value=0, max_value=60,
+                                         value=fund["vacation_carry"], key=f"vc_{u['id']}_{fund_year}")
+                with fc3:
+                    sd = st.number_input("Fond sickday (dny)", min_value=0, max_value=30,
+                                         value=fund["sickday_days"], key=f"sd_{u['id']}_{fund_year}")
+                st.caption(f"Celkový fond dovolené: {int(vd)+int(vc)} dní · zbývá: {total_v - used_v:.1f} dní")
+                if st.button("💾 Uložit fond", key=f"save_fund_{u['id']}_{fund_year}"):
+                    update_leave_fund(u["id"], fund_year, int(vd), int(vc), int(sd))
+                    st.success(f"Uloženo: {u['display_name']} – dovolená {int(vd)}+{int(vc)} dní, sickday {int(sd)} ✓")
+                    st.rerun()
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -1838,15 +2040,17 @@ def page_calendar():
             d += timedelta(days=1)
 
     TYPE_STYLE = {
-        "vacation": ("#dbeafe", "#1d4ed8", "D"),
-        "sickday":  ("#fee2e2", "#991b1b", "S"),
-        "nemoc":    ("#ffe4e6", "#9f1239", "N"),
+        "vacation":      ("#dbeafe", "#1d4ed8", "D"),
+        "vacation_half": ("#bfdbfe", "#1d4ed8", "½"),
+        "sickday":       ("#fee2e2", "#991b1b", "S"),
+        "nemoc":         ("#ffe4e6", "#9f1239", "N"),
     }
     DOW_CZ = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"]
 
     # ── Legenda ──
     legend_items = [
         ("#dbeafe", "#1d4ed8", "D", "Dovolená"),
+        ("#bfdbfe", "#1d4ed8", "½", "Dovolená půlden"),
         ("#fee2e2", "#991b1b", "S", "Sickday"),
         ("#ffe4e6", "#9f1239", "N", "Nemoc / PN"),
         ("#f1f5f9", "#94a3b8", "⭑", "Státní svátek"),
@@ -1969,9 +2173,10 @@ def page_calendar():
 
     sum_parts = ['<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:18px">']
     labels_map = [
-        ("vacation", "#dbeafe", "#1d4ed8", "🏖 Dovolená"),
-        ("sickday",  "#fee2e2", "#991b1b", "🤒 Sickday"),
-        ("nemoc",    "#ffe4e6", "#9f1239", "🏥 Nemoc/PN"),
+        ("vacation",      "#dbeafe", "#1d4ed8", "🏖 Dovolená"),
+        ("vacation_half", "#bfdbfe", "#1d4ed8", "🌅 Půlden"),
+        ("sickday",       "#fee2e2", "#991b1b", "🤒 Sickday"),
+        ("nemoc",         "#ffe4e6", "#9f1239", "🏥 Nemoc/PN"),
     ]
     for typ, bg2, fg2, label in labels_map:
         cnt = type_totals.get(typ, 0)
