@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as _components
 import sqlite3
 import pandas as pd
 import hashlib
@@ -1467,19 +1468,19 @@ def page_absences():
             if summ["sickday_remain"] <= 0:
                 st.warning(f"Nemáte žádný zbývající sickday (čerpáno {summ['sickday_used']}/{summ['sickday_total']}).")
             sick_date = st.date_input("Den", value=cet_today(),
-                                      min_value=cet_today() - timedelta(days=60))
+                                      min_value=cet_today() - timedelta(days=60), format="DD.MM.YYYY")
             date_from = date_to = sick_date
 
         elif abs_type == "nemoc":
             st.caption("Zadejte začátek nemoci. Konec lze doplnit v záložce 'Konec nemoci'. Nemoc nečerpá fond.")
             date_from = st.date_input("Začátek nemoci", value=cet_today(),
-                                      min_value=cet_today() - timedelta(days=90))
+                                      min_value=cet_today() - timedelta(days=90), format="DD.MM.YYYY")
             date_to = date_from
 
         elif abs_type == "vacation_half":
             if summ["vacation_remain"] < 0.5:
                 st.warning(f"Nemáte dostatek dovolené (zbývá {summ['vacation_remain']:.1f} dní).")
-            date_from = st.date_input("Den půldne dovolené", value=cet_today())
+            date_from = st.date_input("Den půldne dovolené", value=cet_today(), format="DD.MM.YYYY")
             date_to   = date_from
             st.caption("Odečte 0,5 dne z fondu dovolené a zkrátí fond pracovní doby o 4 hodiny.")
 
@@ -1488,9 +1489,9 @@ def page_absences():
                 st.warning(f"Nemáte žádnou zbývající dovolenou (čerpáno {summ['vacation_used']:.1f}/{summ['vacation_total']} dní).")
             c1, c2 = st.columns(2)
             with c1:
-                date_from = st.date_input("Od", value=cet_today())
+                date_from = st.date_input("Od", value=cet_today(), format="DD.MM.YYYY")
             with c2:
-                date_to   = st.date_input("Do", value=cet_today())
+                date_to   = st.date_input("Do", value=cet_today(), format="DD.MM.YYYY")
 
         note = st.text_input("Poznámka (nepovinné)")
 
@@ -1525,8 +1526,8 @@ def page_absences():
                     "Datum ukončení nemoci",
                     value=cet_today(),
                     min_value=date.fromisoformat(a["date_from"]),
-                    key=end_key
-                )
+                    key=end_key,
+                    format="DD.MM.YYYY")
                 if st.button("Uložit konec nemoci", key=f"btn_end_{a['id']}"):
                     update_nemoc_end(a["id"], end_date)
                     st.success(f"Konec nemoci uložen: {end_date} ✓")
@@ -1584,7 +1585,7 @@ def page_corrections():
     with tab1:
         st.markdown("Vyplňte datum a požadované časy. Administrátor žádost schválí nebo zamítne.")
         corr_date = st.date_input("Datum záznamu", value=cet_today(),
-                                   min_value=cet_today() - timedelta(days=60))
+                                   min_value=cet_today() - timedelta(days=60), format="DD.MM.YYYY")
 
         st.markdown("**Požadované časy** \\*")
         rc1, rc2 = st.columns(2)
@@ -1836,9 +1837,9 @@ def page_admin():
                                     format_func=lambda x: uid_map[x])
             c1, c2 = st.columns(2)
             with c1:
-                sick_from = st.date_input("Od", value=cet_today())
+                sick_from = st.date_input("Od", value=cet_today(), format="DD.MM.YYYY")
             with c2:
-                sick_to   = st.date_input("Do", value=cet_today())
+                sick_to   = st.date_input("Do", value=cet_today(), format="DD.MM.YYYY")
             sick_note = st.text_input("Poznámka", placeholder="neschopenka, karanténa…")
             submitted_sick = st.form_submit_button("🤒 Zaznamenat nemoc", type="primary")
         if submitted_sick:
@@ -2067,66 +2068,88 @@ def page_calendar():
     st.markdown(leg_html, unsafe_allow_html=True)
 
     # ── Tabulka ──
-    DAY_W = 30
+    DAY_W   = 44   # širší buňka dne
+    NAME_W  = 96   # úzká jmenovka
+    CELL_H  = 38   # výška řádku
+
     parts = []
-    parts.append('<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 1px 4px rgba(31,94,140,.07)">')
-    parts.append('<table style="border-collapse:collapse;font-size:12px;font-family:Inter,sans-serif;width:100%;min-width:max-content">')
+    parts.append('<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:14px;'
+                 'box-shadow:0 2px 8px rgba(31,94,140,.09)">')
+    parts.append('<table style="border-collapse:collapse;font-family:Inter,sans-serif;'
+                 'width:100%;min-width:max-content;table-layout:fixed">')
 
-    # Záhlaví
+    # ── Záhlaví ──
     parts.append('<thead>')
+    parts.append('<tr style="background:#f0f4f8;border-bottom:2px solid #e2e8f0">')
 
-    # Řádek 1: prázdná buňka + čísla dní
-    parts.append('<tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0">')
+    # Jmenovka – záhlaví
     parts.append(
-        '<th style="padding:8px 16px 8px 12px;text-align:left;font-size:11px;color:#64748b;'
-        'font-weight:700;white-space:nowrap;position:sticky;left:0;background:#f8fafc;'
-        'z-index:3;border-right:1px solid #e2e8f0;min-width:160px">Zaměstnanec</th>'
+        '<th style="width:{nw}px;min-width:{nw}px;max-width:{nw}px;padding:8px 6px;'
+        'text-align:center;font-size:10px;color:#94a3b8;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;'
+        'position:sticky;left:0;background:#f0f4f8;z-index:3;'
+        'border-right:2px solid #e2e8f0">—</th>'.format(nw=NAME_W)
     )
+
     for day in range(1, num_days + 1):
-        d = date(year, month, day)
+        d        = date(year, month, day)
         is_wknd  = d.weekday() >= 5
         is_hol   = d in holidays
         is_today = d == today
         if is_today:
-            hdr_bg = "#dbeafe"
-            num_color = "#1d4ed8"
-            border_b  = "border-bottom:3px solid #1d4ed8"
+            hdr_bg    = "#1d4ed8"
+            dow_color = "rgba(255,255,255,.75)"
+            num_color = "#ffffff"
+            border_b  = ""
+            num_fw    = "800"
         elif is_hol:
-            hdr_bg = "#fef9c3"; num_color = "#92400e"; border_b = ""
+            hdr_bg = "#fef3c7"; dow_color = "#92400e"; num_color = "#92400e"; border_b = ""; num_fw = "700"
         elif is_wknd:
-            hdr_bg = "#f1f5f9"; num_color = "#94a3b8"; border_b = ""
+            hdr_bg = "#e8edf2"; dow_color = "#94a3b8"; num_color = "#94a3b8"; border_b = ""; num_fw = "600"
         else:
-            hdr_bg = "#f8fafc"; num_color = "#1e293b"; border_b = ""
+            hdr_bg = "#f0f4f8"; dow_color = "#94a3b8"; num_color = "#1e293b"; border_b = ""; num_fw = "700"
         parts.append(
-            '<th style="width:{w}px;min-width:{w}px;text-align:center;padding:4px 2px;'
-            'background:{bg};{bb}">'
-            '<div style="font-size:9px;color:#94a3b8;line-height:1.1">{dow}</div>'
-            '<div style="font-size:12px;font-weight:700;color:{nc};line-height:1.3">{day}</div>'
-            '</th>'.format(w=DAY_W, bg=hdr_bg, bb=border_b, dow=DOW_CZ[d.weekday()], day=day, nc=num_color)
+            '<th style="width:{w}px;min-width:{w}px;max-width:{w}px;text-align:center;'
+            'padding:6px 2px;background:{bg};{bb}">'
+            '<div style="font-size:9px;color:{dc};line-height:1;margin-bottom:2px;font-weight:600">{dow}</div>'
+            '<div style="font-size:15px;font-weight:{fw};color:{nc};line-height:1">{day}</div>'
+            '</th>'.format(
+                w=DAY_W, bg=hdr_bg, bb=border_b,
+                dow=DOW_CZ[d.weekday()], day=day,
+                nc=num_color, dc=dow_color, fw=num_fw
+            )
         )
     parts.append('</tr></thead>')
 
-    # Tělo – řádky uživatelů
+    # ── Tělo ──
     parts.append('<tbody>')
     for idx, u in enumerate(users):
-        uid  = u["id"]
-        days = user_days.get(uid, {})
+        uid    = u["id"]
+        days   = user_days.get(uid, {})
         row_bg = "#ffffff" if idx % 2 == 0 else "#f8fafc"
 
         parts.append('<tr style="background:{rb}">'.format(rb=row_bg))
 
-        # Jméno s avatarem
-        initials = "".join(w[0].upper() for w in u["display_name"].split()[:2])
-        color    = u.get("color") or "#1f5e8c"
+        # Jmenovka – jen avatar + příjmení zkrácené
+        initials  = "".join(w[0].upper() for w in u["display_name"].split()[:2])
+        short_name = u["display_name"].split()[-1]   # pouze příjmení
+        color      = u.get("color") or "#1f5e8c"
         parts.append(
-            '<td style="padding:6px 16px 6px 12px;white-space:nowrap;position:sticky;left:0;'
-            'background:{rb};z-index:1;border-right:1px solid #e2e8f0;border-bottom:1px solid #f1f5f9">'
-            '<div style="display:flex;align-items:center;gap:8px">'
-            '<div style="width:26px;height:26px;border-radius:13px;flex-shrink:0;'
-            'background:{c}22;color:{c};border:1.5px solid {c}55;'
-            'display:flex;align-items:center;justify-content:center;font-weight:800;font-size:9px">{ini}</div>'
-            '<span style="font-weight:600;font-size:12px;color:#1e293b">{name}</span>'
-            '</div></td>'.format(rb=row_bg, c=color, ini=initials, name=u["display_name"])
+            '<td style="width:{nw}px;min-width:{nw}px;max-width:{nw}px;height:{ch}px;'
+            'padding:4px 6px;white-space:nowrap;overflow:hidden;'
+            'position:sticky;left:0;background:{rb};z-index:1;'
+            'border-right:2px solid #e2e8f0;border-bottom:1px solid #f1f5f9">'
+            '<div style="display:flex;align-items:center;gap:5px;justify-content:flex-start">'
+            '<div style="width:22px;height:22px;border-radius:11px;flex-shrink:0;'
+            'background:{c}20;color:{c};border:1.5px solid {c}50;'
+            'display:flex;align-items:center;justify-content:center;'
+            'font-weight:800;font-size:8px;line-height:1">{ini}</div>'
+            '<span style="font-weight:600;font-size:11px;color:#334155;'
+            'overflow:hidden;text-overflow:ellipsis;max-width:{mw}px" title="{fullname}">{sname}</span>'
+            '</div></td>'.format(
+                nw=NAME_W, ch=CELL_H, rb=row_bg, c=color, ini=initials,
+                sname=short_name, fullname=u["display_name"], mw=NAME_W - 34
+            )
         )
 
         for day in range(1, num_days + 1):
@@ -2139,24 +2162,32 @@ def page_calendar():
             if abs_type:
                 bg2, fg2, letter = TYPE_STYLE.get(abs_type, ("#f1f5f9", "#64748b", "?"))
                 inner = (
-                    '<div style="width:24px;height:24px;margin:1px auto;border-radius:4px;'
-                    'background:{bg};border:1px solid {fg}55;'
+                    '<div style="width:32px;height:32px;margin:0 auto;border-radius:6px;'
+                    'background:{bg};border:1.5px solid {fg}60;'
                     'display:flex;align-items:center;justify-content:center;'
-                    'font-size:10px;font-weight:800;color:{fg}">{lt}</div>'
+                    'font-size:12px;font-weight:800;color:{fg}">{lt}</div>'
                 ).format(bg=bg2, fg=fg2, lt=letter)
             elif is_hol:
-                inner = '<div style="text-align:center;font-size:12px;color:#f59e0b;line-height:2">⭑</div>'
+                inner = '<div style="text-align:center;font-size:16px;color:#f59e0b;line-height:2.2">⭑</div>'
             elif is_wknd:
-                inner = '<div style="width:24px;height:4px;margin:10px auto;background:#e2e8f0;border-radius:2px"></div>'
+                inner = '<div style="width:20px;height:3px;margin:17px auto;background:#d1d5db;border-radius:2px"></div>'
             else:
                 inner = ''
 
-            today_border = "border-left:2px solid #93c5fd;border-right:2px solid #93c5fd;" if is_today else ""
-            cell_bg = "#eff6ff" if is_today else ("#f1f5f9" if is_wknd or is_hol else row_bg)
+            if is_today:
+                cell_bg = "#eff6ff"
+                today_border = "border-left:2px solid #1d4ed8;border-right:2px solid #1d4ed8;"
+            elif is_hol:
+                cell_bg = "#fffbeb"; today_border = ""
+            elif is_wknd:
+                cell_bg = "#f1f5f9"; today_border = ""
+            else:
+                cell_bg = row_bg; today_border = ""
+
             parts.append(
-                '<td style="text-align:center;padding:3px 2px;{tb}background:{cb};'
-                'border-bottom:1px solid #f1f5f9">{inner}</td>'.format(
-                    tb=today_border, cb=cell_bg, inner=inner
+                '<td style="text-align:center;padding:3px 2px;height:{ch}px;'
+                '{tb}background:{cb};border-bottom:1px solid #f1f5f9">{inner}</td>'.format(
+                    ch=CELL_H, tb=today_border, cb=cell_bg, inner=inner
                 )
             )
         parts.append('</tr>')
@@ -2209,6 +2240,84 @@ def page_calendar():
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+
+# ─────────────────────────────────────────────
+# CZECH CALENDAR INJECTION
+# ─────────────────────────────────────────────
+def inject_czech_datepicker():
+    """
+    Přejmenuje anglické názvy dnů a měsíců na české přes MutationObserver
+    a přesune neděli na konec řádku (týden začíná pondělím).
+    """
+    _components.html("""
+    <script>
+    (function() {
+        const DAY_MAP  = {'Su':'Ne','Mo':'Po','Tu':'Út','We':'St','Th':'Čt','Fr':'Pá','Sa':'So'};
+        const MONTH_MAP = {
+            'January':'leden','February':'únor','March':'březen','April':'duben',
+            'May':'květen','June':'červen','July':'červenec','August':'srpen',
+            'September':'září','October':'říjen','November':'listopad','December':'prosinec'
+        };
+
+        function patch(root) {
+            // Přejmenuj zkratky dní
+            root.querySelectorAll(
+                '.react-datepicker__day-name, .stDatePicker__dayName, [data-testid="datepicker-day-name"]'
+            ).forEach(el => {
+                const t = el.textContent.trim();
+                if (DAY_MAP[t]) el.textContent = DAY_MAP[t];
+            });
+            // Přejmenuj měsíce v záhlaví
+            root.querySelectorAll(
+                '.react-datepicker__current-month, .stDatePicker__currentMonth, [data-testid="datepicker-current-month"]'
+            ).forEach(el => {
+                let txt = el.textContent;
+                for (const [en, cz] of Object.entries(MONTH_MAP)) {
+                    txt = txt.replace(en, cz.charAt(0).toUpperCase() + cz.slice(1));
+                }
+                if (txt !== el.textContent) el.textContent = txt;
+            });
+            // Přejmenuj měsíce v dropdown
+            root.querySelectorAll(
+                '.react-datepicker__month-select option, .react-datepicker__month-option'
+            ).forEach(el => {
+                const txt = el.textContent.trim();
+                if (MONTH_MAP[txt]) el.textContent = MONTH_MAP[txt].charAt(0).toUpperCase() + MONTH_MAP[txt].slice(1);
+            });
+        }
+
+        // CSS: neděle (první div) přesuň na konec pomocí flex order
+        const style = window.parent.document.createElement('style');
+        style.id = 'czech-calendar-css';
+        style.textContent = `
+            /* Týden začíná pondělím – neděle přesunuta na konec */
+            .react-datepicker__day-names,
+            .react-datepicker__week {
+                display: flex !important;
+            }
+            .react-datepicker__day-names > div:first-child,
+            .react-datepicker__week > div:first-child {
+                order: 7 !important;
+            }
+            /* Zvýrazni víkend */
+            .react-datepicker__day--weekend {
+                color: #1f5e8c !important;
+                font-weight: 600 !important;
+            }
+        `;
+        if (!window.parent.document.getElementById('czech-calendar-css')) {
+            window.parent.document.head.appendChild(style);
+        }
+
+        // MutationObserver – sleduj otevření kalendáře
+        const observer = new MutationObserver(() => patch(window.parent.document));
+        observer.observe(window.parent.document.body, { childList: true, subtree: true });
+        // První průchod
+        patch(window.parent.document);
+    })();
+    </script>
+    """, height=0, scrolling=False)
+
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
@@ -2227,6 +2336,7 @@ if "user" not in st.session_state:
 else:
     user     = st.session_state.user
     is_admin = user["role"] == "admin"
+    inject_czech_datepicker()
 
     with st.sidebar:
         # ── Logo (modré – světlé pozadí sidebaru) ──
