@@ -256,6 +256,7 @@ div[data-testid="stVerticalBlock"] > div > div > div {
 .badge-working  { background: var(--green-bg);  color: var(--green); }
 .badge-pause    { background: var(--orange-bg); color: var(--orange); }
 .badge-sick     { background: var(--red-bg);    color: var(--red); }
+.badge-nemoc    { background: #ffe4e6;          color: #9f1239; }
 .badge-vacation { background: var(--blue-bg);   color: var(--primary); }
 .badge-offline  { background: #f1f5f9;          color: #64748b; }
 .badge-pending  { background: var(--orange-bg); color: var(--orange); }
@@ -722,6 +723,15 @@ def delete_absence(absence_id):
         conn.commit()
 
 # ── Time corrections ──
+def update_nemoc_end(absence_id: int, date_to):
+    """Doplní konec nemoci do existujícího záznamu."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE absences SET date_to=? WHERE id=? AND absence_type='nemoc'",
+            (date_to.isoformat(), absence_id)
+        )
+        conn.commit()
+
 def request_correction(user_id, d, orig_in, orig_out, orig_bs, orig_be,
                         req_in, req_out, req_bs, req_be, reason):
     with get_conn() as conn:
@@ -760,7 +770,7 @@ def resolve_correction(correction_id: int, approve: bool, admin_note: str = ""):
 
 # ── E-mail ──
 def send_absence_email(to_email: str, to_name: str, absence: dict) -> bool:
-    type_cz = "Dovolená" if absence["absence_type"] == "vacation" else "Sickday / Nemoc"
+    type_cz = {"vacation": "Dovolená", "nemoc": "Nemoc / PN", "sickday": "Sickday"}.get(absence["absence_type"], "Absence")
     date_str = absence["date_from"] if absence["date_from"] == absence["date_to"] \
                else f"{absence['date_from']} – {absence['date_to']}"
     note_str = f"\nPoznámka: {absence['note']}" if absence.get("note") else ""
@@ -891,7 +901,8 @@ def avatar_html(name: str, color: str = "#1f5e8c") -> str:
 STATUS_LABEL = {
     "working": ("Pracuje",   "working"),
     "pause":   ("Pauza",     "pause"),
-    "sickday": ("Nemocný/á", "sick"),
+    "sickday": ("Sickday",   "sick"),
+    "nemoc":   ("Nemoc/PN", "nemoc"),
     "vacation":("Dovolená",  "vacation"),
     "offline": ("Offline",   "offline"),
     "done":    ("Skončil/a", "offline"),
@@ -903,6 +914,9 @@ MONTH_NAMES = ["Leden","Únor","Březen","Duben","Květen","Červen",
 def status_badge(status: str) -> str:
     label, cls = STATUS_LABEL.get(status, ("", "offline"))
     return f'<span class="badge badge-{cls}">{label}</span>'
+
+def nemoc_open_badge():
+    return '<span class="badge badge-nemoc">🤒 Otevřená nemoc</span>'
 
 def correction_status_badge(status: str) -> str:
     labels = {"pending": ("⏳ Čeká", "pending"), "approved": ("✅ Schváleno", "approved"), "rejected": ("❌ Zamítnuto", "rejected")}
@@ -1048,7 +1062,7 @@ def page_my_attendance():
     absences_today = get_absences_for_date()
     my_absence = next((a for a in absences_today if a["user_id"] == user["id"]), None)
     if my_absence:
-        label = "Dovolená" if my_absence["absence_type"] == "vacation" else "Sickday / Nemoc"
+        label = {"vacation": "Dovolená", "nemoc": "Nemoc / PN"}.get(my_absence["absence_type"], "Sickday")
         st.info(f"ℹ️ Dnes máš nahlášen/o: **{label}**. Docházka se nezaznamenává.")
         return
 
@@ -1197,50 +1211,108 @@ def page_absences():
     user = st.session_state.user
     st.markdown("""<div class="page-header">
         <h1>🏖 Absence</h1>
-        <p>Nahlášení dovolené nebo sickday – čeká na schválení administrátora</p>
+        <p>Nahlášení dovolené, sickday nebo nemoci – čeká na schválení administrátora</p>
     </div>
     <div class="content-pad">""", unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["➕ Nová žádost", "📋 Moje absence"])
+    tab1, tab2, tab3 = st.tabs(["➕ Nová žádost", "🏁 Konec nemoci", "📋 Moje absence"])
 
+    # ── Tab 1: Nová žádost ──────────────────────────────────────
     with tab1:
-        abs_type = st.selectbox("Typ", ["sickday", "vacation"],
-                                format_func=lambda x: "🤒 Sickday / Nemoc" if x == "sickday" else "🏖 Dovolená")
+        abs_type = st.selectbox(
+            "Typ absence",
+            ["sickday", "nemoc", "vacation"],
+            format_func=lambda x: {
+                "sickday":  "🤒 Sickday (jeden den)",
+                "nemoc":    "🏥 Nemoc / PN (více dní)",
+                "vacation": "🏖 Dovolená",
+            }[x]
+        )
+
         if abs_type == "sickday":
             sick_date = st.date_input("Den nemoci", value=cet_today(),
-                                      min_value=cet_today() - timedelta(days=30))
+                                      min_value=cet_today() - timedelta(days=60))
             date_from = date_to = sick_date
-        else:
+
+        elif abs_type == "nemoc":
+            st.caption("Zadejte začátek nemoci. Konec lze doplnit později v záložce 'Konec nemoci'.")
+            date_from = st.date_input("Začátek nemoci", value=cet_today(),
+                                      min_value=cet_today() - timedelta(days=90))
+            date_to = date_from   # konec se doplní dodatečně
+
+        else:  # vacation
             c1, c2 = st.columns(2)
             with c1:
                 date_from = st.date_input("Od", value=cet_today())
             with c2:
                 date_to   = st.date_input("Do", value=cet_today())
+
         note = st.text_input("Poznámka (nepovinné)")
+
         if st.button("Odeslat žádost", type="primary"):
-            if date_to < date_from:
+            if abs_type != "nemoc" and date_to < date_from:
                 st.error("Datum 'Do' musí být stejné nebo pozdější než 'Od'.")
             else:
                 request_absence(user["id"], abs_type, date_from, date_to, note)
-                st.success("Žádost odeslána – čeká na schválení administrátorem ✓")
+                st.success("Žádost odeslána ✓")
                 st.rerun()
 
+    # ── Tab 2: Konec nemoci ─────────────────────────────────────
     with tab2:
+        my_absences = get_user_absences(user["id"])
+        # Otevřené nemoci = typ nemoc, approved=1, date_to == date_from (konec ještě nezadán)
+        open_nemoci = [
+            a for a in my_absences
+            if a["absence_type"] == "nemoc" and a["approved"] == 1
+            and a["date_to"] == a["date_from"]
+        ]
+        if not open_nemoci:
+            st.info("Žádná otevřená nemoc – buď ještě nebyla schválena, nebo konec byl již zadán.")
+        else:
+            st.markdown(f"Máte **{len(open_nemoci)}** otevřenou nemoc:")
+            for a in open_nemoci:
+                st.markdown(f"""<div class="card card-red">
+                    <strong style="color:#1e293b">🏥 Nemoc od {a['date_from']}</strong>
+                    {f'<span style="color:#64748b"> · {a["note"]}</span>' if a.get('note') else ''}
+                </div>""", unsafe_allow_html=True)
+                end_key = f"end_nemoc_{a['id']}"
+                end_date = st.date_input(
+                    "Datum ukončení nemoci",
+                    value=cet_today(),
+                    min_value=date.fromisoformat(a["date_from"]),
+                    key=end_key
+                )
+                if st.button("Uložit konec nemoci", key=f"btn_end_{a['id']}"):
+                    update_nemoc_end(a["id"], end_date)
+                    st.success(f"Konec nemoci uložen: {end_date} ✓")
+                    st.rerun()
+                st.markdown("---")
+
+    # ── Tab 3: Moje absence ─────────────────────────────────────
+    with tab3:
         absences = get_user_absences(user["id"])
         if not absences:
             st.info("Žádné absence.")
-        type_labels = {"sickday": "🤒 Sickday", "vacation": "🏖 Dovolená"}
-        status_map  = {0: ("⏳ Čeká na schválení", "yellow"), 1: ("✅ Schváleno", "green"), -1: ("❌ Zamítnuto", "red")}
+        type_labels = {
+            "sickday":  "🤒 Sickday",
+            "nemoc":    "🏥 Nemoc / PN",
+            "vacation": "🏖 Dovolená",
+        }
+        status_map = {0: ("⏳ Čeká na schválení", "yellow"), 1: ("✅ Schváleno", "green"), -1: ("❌ Zamítnuto", "red")}
         for a in absences:
             type_label = type_labels.get(a["absence_type"], a["absence_type"])
             status_str, s_color = status_map.get(a["approved"], ("?", "gray"))
-            note_str = f" · {a['note']}" if a.get("note") else ""
-            date_str = a["date_from"] if a["date_from"] == a["date_to"] else f"{a['date_from']} – {a['date_to']}"
-            email_str = " · ✉ Potvrzení zasláno emailem" if a.get("email_sent") else ""
+            note_str  = f" · {a['note']}" if a.get("note") else ""
+            # Pro nemoc s nezadaným koncem zobrazíme "od X – konec nezadán"
+            if a["absence_type"] == "nemoc" and a["date_to"] == a["date_from"]:
+                date_str = f"od {a['date_from']} – <em>konec nezadán</em>"
+            else:
+                date_str = a["date_from"] if a["date_from"] == a["date_to"] else f"{a['date_from']} – {a['date_to']}"
+            email_str = " · ✉ email odeslán" if a.get("email_sent") else ""
             st.markdown(f"""<div class="card card-{s_color}">
-                <strong style="color:#1a2e4a">{type_label}</strong>
-                <span style="color:#3a5068"> · {date_str}{note_str}</span><br>
-                <small style="color:#7a93ab">{status_str}{email_str}</small>
+                <strong style="color:#1e293b">{type_label}</strong>
+                <span style="color:#475569"> · {date_str}{note_str}</span><br>
+                <small style="color:#64748b">{status_str}{email_str}</small>
             </div>""", unsafe_allow_html=True)
             if a["approved"] == 0:
                 if st.button("Zrušit žádost", key=f"del_abs_{a['id']}"):
@@ -1267,33 +1339,25 @@ def page_corrections():
         st.markdown("Vyplňte datum a požadované časy. Administrátor žádost schválí nebo zamítne.")
         corr_date = st.date_input("Datum záznamu", value=cet_today(),
                                    min_value=cet_today() - timedelta(days=60))
-        st.markdown("**Původní časy** (pokud znáte)")
-        oc1, oc2 = st.columns(2)
-        with oc1:
-            orig_in  = st.text_input("Původní příchod", placeholder="08:15", key="orig_in")
-            orig_bs  = st.text_input("Původní začátek pauzy", placeholder="12:00", key="orig_bs")
-        with oc2:
-            orig_out = st.text_input("Původní odchod", placeholder="16:00", key="orig_out")
-            orig_be  = st.text_input("Původní konec pauzy",   placeholder="12:30", key="orig_be")
 
         st.markdown("**Požadované časy** \\*")
         rc1, rc2 = st.columns(2)
         with rc1:
-            req_in  = st.text_input("Požadovaný příchod *", placeholder="07:45", key="req_in")
-            req_bs  = st.text_input("Požadovaný začátek pauzy", placeholder="11:30", key="req_bs")
+            req_in  = st.text_input("Příchod *", placeholder="07:45", key="req_in")
+            req_bs  = st.text_input("Začátek pauzy", placeholder="11:30", key="req_bs")
         with rc2:
-            req_out = st.text_input("Požadovaný odchod *", placeholder="15:30", key="req_out")
-            req_be  = st.text_input("Požadovaný konec pauzy",   placeholder="12:00", key="req_be")
+            req_out = st.text_input("Odchod *", placeholder="15:30", key="req_out")
+            req_be  = st.text_input("Konec pauzy", placeholder="12:00", key="req_be")
 
         reason = st.text_area("Důvod úpravy *", placeholder="Popište důvod požadované opravy záznamu…")
 
         if st.button("Odeslat žádost o úpravu", type="primary"):
             if not req_in or not req_out or not reason.strip():
-                st.error("Vyplňte povinná pole: Požadovaný příchod, odchod a důvod.")
+                st.error("Vyplňte povinná pole: Příchod, odchod a důvod.")
             else:
                 request_correction(
                     user["id"], corr_date.isoformat(),
-                    orig_in, orig_out, orig_bs, orig_be,
+                    "", "", "", "",
                     req_in, req_out, req_bs, req_be, reason
                 )
                 st.success("Žádost odeslána – administrátor ji brzy vyřídí ✓")
@@ -1304,14 +1368,13 @@ def page_corrections():
         if not corrections:
             st.info("Žádné žádosti o úpravu.")
         for c in corrections:
-            orig_str = f"{c['orig_in'] or '?'} – {c['orig_out'] or '?'}"
             req_str  = f"{c['req_in']} – {c['req_out']}"
-            admin_note_str = f"<br><small style='color:#7a93ab'>Poznámka admina: {c['admin_note']}</small>" if c.get("admin_note") else ""
+            admin_note_str = f"<br><small style='color:#64748b'>Poznámka admina: {c['admin_note']}</small>" if c.get("admin_note") else ""
             st.markdown(f"""<div class="card">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start">
                     <div>
                         <strong style="color:#1e293b">{c['date']}</strong>
-                        <span style="color:#475569"> · původně {orig_str} → požadováno {req_str}</span><br>
+                        <span style="color:#475569"> · požadováno {req_str}</span><br>
                         <small style="color:#64748b">{c['reason']}</small>{admin_note_str}
                     </div>
                     {correction_status_badge(c['status'])}
@@ -1377,27 +1440,39 @@ def page_reports():
         df = pd.DataFrame(all_rows)
         st.dataframe(df, use_container_width=True, hide_index=True)
         csv = df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name="Přehled", index=False)
-            for tu in target_users:
-                stats = get_month_stats(tu["id"], year, month)
-                if stats:
-                    df2 = pd.DataFrame(stats)
-                    df2["Odpracováno"] = df2["worked_seconds"].apply(seconds_to_hm)
-                    df2["Typ"] = df2["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
-                    df2 = df2[["date","checkin","checkout","Odpracováno","Typ"]].rename(
-                        columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
-                    df2.to_excel(writer, sheet_name=tu["display_name"][:31], index=False)
-        buf.seek(0)
-        dl1, dl2, _ = st.columns([1, 1, 4])
-        with dl1:
+
+        # XLSX – openpyxl nemusí být k dispozici (Streamlit Cloud)
+        xlsx_buf = None
+        try:
+            import openpyxl  # noqa: F401
+            xlsx_buf = io.BytesIO()
+            with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:
+                df.to_excel(writer, sheet_name="Přehled", index=False)
+                for tu in target_users:
+                    _s = get_month_stats(tu["id"], year, month)
+                    if _s:
+                        df2 = pd.DataFrame(_s)
+                        df2["Odpracováno"] = df2["worked_seconds"].apply(seconds_to_hm)
+                        df2["Typ"] = df2["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
+                        df2 = df2[["date","checkin","checkout","Odpracováno","Typ"]].rename(
+                            columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
+                        df2.to_excel(writer, sheet_name=tu["display_name"][:31], index=False)
+            xlsx_buf.seek(0)
+        except ImportError:
+            pass
+
+        btn_cols = st.columns([1, 1, 4]) if xlsx_buf else st.columns([1, 5])
+        with btn_cols[0]:
             st.download_button("⬇ CSV", data=csv,
                                file_name=f"dochazka_{year}_{month:02d}.csv", mime="text/csv")
-        with dl2:
-            st.download_button("⬇ XLSX", data=buf,
-                               file_name=f"dochazka_{year}_{month:02d}.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if xlsx_buf:
+            with btn_cols[1]:
+                st.download_button("⬇ XLSX", data=xlsx_buf,
+                                   file_name=f"dochazka_{year}_{month:02d}.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        else:
+            with btn_cols[1]:
+                st.caption("XLSX nedostupné – přidejte `openpyxl` do requirements.txt")
 
         if len(target_users) == 1:
             st.markdown("---")
@@ -1566,7 +1641,7 @@ def page_admin():
         if not pending_abs:
             st.info("✅ Žádné čekající žádosti o absenci.")
 
-        type_labels = {"sickday": "🤒 Sickday", "vacation": "🏖 Dovolená"}
+        type_labels = {"sickday": "🤒 Sickday", "nemoc": "🏥 Nemoc/PN", "vacation": "🏖 Dovolená"}
         for a in pending_abs:
             type_label = type_labels.get(a["absence_type"], a["absence_type"])
             date_str   = a["date_from"] if a["date_from"] == a["date_to"] else f"{a['date_from']} – {a['date_to']}"
