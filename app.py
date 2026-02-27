@@ -849,19 +849,101 @@ def get_month_stats(user_id, year: int, month: int):
         })
     return results
 
+def czech_holidays(year: int) -> set:
+    """Státní svátky ČR pro daný rok."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d2, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d2 - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month_, day_ = divmod(114 + h + l - 7 * m, 31)
+    easter_monday = date(year, month_, day_ + 1) + timedelta(days=1)
+    return {
+        date(year, 1, 1),    # Nový rok
+        easter_monday,        # Velikonoční pondělí
+        date(year, 5, 1),    # Svátek práce
+        date(year, 5, 8),    # Den vítězství
+        date(year, 7, 5),    # Cyril a Metoděj
+        date(year, 7, 6),    # Mistr Jan Hus
+        date(year, 9, 28),   # Den české státnosti
+        date(year, 10, 28),  # Vznik ČSR
+        date(year, 11, 17),  # Den boje za svobodu a demokracii
+        date(year, 12, 24),  # Štědrý den
+        date(year, 12, 25),  # 1. svátek vánoční
+        date(year, 12, 26),  # 2. svátek vánoční
+    }
+
+
+def is_workday(d: date) -> bool:
+    """Pracovní den = ne víkend a ne státní svátek."""
+    return d.weekday() < 5 and d not in czech_holidays(d.year)
+
+
+def count_workdays_in_range(d_from: date, d_to: date) -> int:
+    """Počet pracovních dní v rozsahu (včetně krajních, bez víkendů a svátků)."""
+    count, d = 0, d_from
+    while d <= d_to:
+        if is_workday(d):
+            count += 1
+        d += timedelta(days=1)
+    return count
+
+
 def count_workdays_so_far(year: int, month: int) -> int:
+    """Pracovní dny v měsíci do dneška (bez víkendů a státních svátků)."""
     today = cet_today()
     first = date(year, month, 1)
     if year == today.year and month == today.month:
         last = today
     else:
         last = (date(year, month + 1, 1) - timedelta(days=1)) if month < 12 else date(year, 12, 31)
-    count, d = 0, first
-    while d <= last:
-        if d.weekday() < 5:
-            count += 1
-        d += timedelta(days=1)
-    return count
+    return count_workdays_in_range(first, last)
+
+
+def count_absence_workdays(user_id: int, year: int, month: int) -> int:
+    """Počet schválených pracovních dní absence (dovolená / sickday / nemoc) v daném měsíci."""
+    first = date(year, month, 1)
+    last  = (date(year, month + 1, 1) - timedelta(days=1)) if month < 12 else date(year, 12, 31)
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT date_from, date_to FROM absences
+               WHERE user_id=? AND approved=1
+               AND absence_type IN ('vacation','sickday','nemoc')
+               AND date_to >= ? AND date_from <= ?""",
+            (user_id, first.isoformat(), last.isoformat())
+        ).fetchall()
+    total = 0
+    for row in rows:
+        ab_from = max(date.fromisoformat(row["date_from"]), first)
+        ab_to   = min(date.fromisoformat(row["date_to"]),   last)
+        total  += count_workdays_in_range(ab_from, ab_to)
+    return total
+
+
+def effective_workdays(user_id: int, year: int, month: int) -> int:
+    """Efektivní fond = pracovní dny měsíce − schválené absence."""
+    return max(0, count_workdays_so_far(year, month) - count_absence_workdays(user_id, year, month))
+
+
+def get_all_absences_for_calendar(year: int, month: int):
+    """Všechny schválené absence v daném měsíci pro kalendář."""
+    first = date(year, month, 1)
+    last  = (date(year, month + 1, 1) - timedelta(days=1)) if month < 12 else date(year, 12, 31)
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT a.*, u.display_name, u.color
+               FROM absences a JOIN users u ON a.user_id = u.id
+               WHERE a.approved=1
+               AND a.absence_type IN ('vacation','sickday','nemoc')
+               AND a.date_to >= ? AND a.date_from <= ?
+               ORDER BY a.date_from""",
+            (first.isoformat(), last.isoformat())
+        ).fetchall()]
+
 
 def get_status_overview():
     today = today_str()
@@ -1163,7 +1245,9 @@ def page_my_attendance():
 
     stats = get_month_stats(user["id"], year, month)
     workdays_so_far = count_workdays_so_far(year, month)
-    expected_sec    = workdays_so_far * 8 * 3600
+    absence_days    = count_absence_workdays(user["id"], year, month)
+    eff_days        = effective_workdays(user["id"], year, month)
+    expected_sec    = eff_days * 8 * 3600
     wd_sec  = sum(s["worked_seconds"] for s in stats if not s["is_weekend"])
     we_sec  = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
     diff    = wd_sec - expected_sec
@@ -1176,7 +1260,7 @@ def page_my_attendance():
     with c2:
         st.markdown(f"""<div class="card card-gray"><h3>Fond pracovní doby</h3>
             <div class="value" style="color:#3a5068">{seconds_to_hm(expected_sec)}</div>
-            <div class="sub">{workdays_so_far} pracovních dní</div></div>""", unsafe_allow_html=True)
+            <div class="sub">{eff_days} dní (−{absence_days} absence)</div></div>""", unsafe_allow_html=True)
     with c3:
         color    = "green" if diff >= 0 else "red"
         val_col  = "#145c38" if diff >= 0 else "#9b2116"
@@ -1421,14 +1505,17 @@ def page_reports():
 
     all_rows = []
     for tu in target_users:
-        stats    = get_month_stats(tu["id"], year, month)
-        workdays = count_workdays_so_far(year, month)
-        wd_sec   = sum(s["worked_seconds"] for s in stats if not s["is_weekend"])
-        we_sec   = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
-        expected = workdays * 8 * 3600
+        stats     = get_month_stats(tu["id"], year, month)
+        workdays  = count_workdays_so_far(year, month)
+        ab_days   = count_absence_workdays(tu["id"], year, month)
+        eff_days  = max(0, workdays - ab_days)
+        wd_sec    = sum(s["worked_seconds"] for s in stats if not s["is_weekend"])
+        we_sec    = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
+        expected  = eff_days * 8 * 3600
         all_rows.append({
             "Jméno": tu["display_name"],
-            "Pracovní dny": workdays,
+            "Prac. dny": workdays,
+            "Absence (dny)": ab_days,
             "Fond (h)": round(expected / 3600, 2),
             "Odpracováno (h)": round(wd_sec / 3600, 2),
             "Víkend (h)": round(we_sec / 3600, 2),
@@ -1711,6 +1798,213 @@ def page_admin():
 
 
 # ─────────────────────────────────────────────
+# PAGE: CALENDAR
+# ─────────────────────────────────────────────
+def page_calendar():
+    today = cet_today()
+    st.markdown("""<div class="page-header">
+        <h1>📅 Kalendář absencí</h1>
+        <p>Přehled dovolených, sickday a nemocí všech zaměstnanců</p>
+    </div>
+    <div class="content-pad">""", unsafe_allow_html=True)
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        month = st.selectbox("Měsíc", list(range(1, 13)), index=today.month - 1,
+                             format_func=lambda m: MONTH_NAMES[m-1], key="cal_month")
+    with c2:
+        year = st.selectbox("Rok", list(range(today.year - 1, today.year + 2)),
+                            index=1, key="cal_year")
+
+    first    = date(year, month, 1)
+    last     = (date(year, month + 1, 1) - timedelta(days=1)) if month < 12 else date(year, 12, 31)
+    num_days = last.day
+    holidays = czech_holidays(year)
+
+    absences = get_all_absences_for_calendar(year, month)
+    users    = get_all_users()
+
+    # {user_id: {day_int: absence_type}}
+    user_days = {}
+    for a in absences:
+        uid = a["user_id"]
+        if uid not in user_days:
+            user_days[uid] = {}
+        ab_from = max(date.fromisoformat(a["date_from"]), first)
+        ab_to   = min(date.fromisoformat(a["date_to"]),   last)
+        d = ab_from
+        while d <= ab_to:
+            user_days[uid][d.day] = a["absence_type"]
+            d += timedelta(days=1)
+
+    TYPE_STYLE = {
+        "vacation": ("#dbeafe", "#1d4ed8", "D"),
+        "sickday":  ("#fee2e2", "#991b1b", "S"),
+        "nemoc":    ("#ffe4e6", "#9f1239", "N"),
+    }
+    DOW_CZ = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"]
+
+    # ── Legenda ──
+    legend_items = [
+        ("#dbeafe", "#1d4ed8", "D", "Dovolená"),
+        ("#fee2e2", "#991b1b", "S", "Sickday"),
+        ("#ffe4e6", "#9f1239", "N", "Nemoc / PN"),
+        ("#f1f5f9", "#94a3b8", "⭑", "Státní svátek"),
+    ]
+    leg_html = '<div style="display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap">'
+    for bg, fg, letter, label in legend_items:
+        leg_html += (
+            '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#475569">'
+            '<div style="width:22px;height:22px;background:{bg};border:1px solid {fg}66;border-radius:4px;'
+            'display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:{fg}">{letter}</div>'
+            '{label}</div>'
+        ).format(bg=bg, fg=fg, letter=letter, label=label)
+    leg_html += '</div>'
+    st.markdown(leg_html, unsafe_allow_html=True)
+
+    # ── Tabulka ──
+    DAY_W = 30
+    parts = []
+    parts.append('<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 1px 4px rgba(31,94,140,.07)">')
+    parts.append('<table style="border-collapse:collapse;font-size:12px;font-family:Inter,sans-serif;width:100%;min-width:max-content">')
+
+    # Záhlaví
+    parts.append('<thead>')
+
+    # Řádek 1: prázdná buňka + čísla dní
+    parts.append('<tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0">')
+    parts.append(
+        '<th style="padding:8px 16px 8px 12px;text-align:left;font-size:11px;color:#64748b;'
+        'font-weight:700;white-space:nowrap;position:sticky;left:0;background:#f8fafc;'
+        'z-index:3;border-right:1px solid #e2e8f0;min-width:160px">Zaměstnanec</th>'
+    )
+    for day in range(1, num_days + 1):
+        d = date(year, month, day)
+        is_wknd  = d.weekday() >= 5
+        is_hol   = d in holidays
+        is_today = d == today
+        if is_today:
+            hdr_bg = "#dbeafe"
+            num_color = "#1d4ed8"
+            border_b  = "border-bottom:3px solid #1d4ed8"
+        elif is_hol:
+            hdr_bg = "#fef9c3"; num_color = "#92400e"; border_b = ""
+        elif is_wknd:
+            hdr_bg = "#f1f5f9"; num_color = "#94a3b8"; border_b = ""
+        else:
+            hdr_bg = "#f8fafc"; num_color = "#1e293b"; border_b = ""
+        parts.append(
+            '<th style="width:{w}px;min-width:{w}px;text-align:center;padding:4px 2px;'
+            'background:{bg};{bb}">'
+            '<div style="font-size:9px;color:#94a3b8;line-height:1.1">{dow}</div>'
+            '<div style="font-size:12px;font-weight:700;color:{nc};line-height:1.3">{day}</div>'
+            '</th>'.format(w=DAY_W, bg=hdr_bg, bb=border_b, dow=DOW_CZ[d.weekday()], day=day, nc=num_color)
+        )
+    parts.append('</tr></thead>')
+
+    # Tělo – řádky uživatelů
+    parts.append('<tbody>')
+    for idx, u in enumerate(users):
+        uid  = u["id"]
+        days = user_days.get(uid, {})
+        row_bg = "#ffffff" if idx % 2 == 0 else "#f8fafc"
+
+        parts.append('<tr style="background:{rb}">'.format(rb=row_bg))
+
+        # Jméno s avatarem
+        initials = "".join(w[0].upper() for w in u["display_name"].split()[:2])
+        color    = u.get("color") or "#1f5e8c"
+        parts.append(
+            '<td style="padding:6px 16px 6px 12px;white-space:nowrap;position:sticky;left:0;'
+            'background:{rb};z-index:1;border-right:1px solid #e2e8f0;border-bottom:1px solid #f1f5f9">'
+            '<div style="display:flex;align-items:center;gap:8px">'
+            '<div style="width:26px;height:26px;border-radius:13px;flex-shrink:0;'
+            'background:{c}22;color:{c};border:1.5px solid {c}55;'
+            'display:flex;align-items:center;justify-content:center;font-weight:800;font-size:9px">{ini}</div>'
+            '<span style="font-weight:600;font-size:12px;color:#1e293b">{name}</span>'
+            '</div></td>'.format(rb=row_bg, c=color, ini=initials, name=u["display_name"])
+        )
+
+        for day in range(1, num_days + 1):
+            d        = date(year, month, day)
+            is_wknd  = d.weekday() >= 5
+            is_hol   = d in holidays
+            is_today = d == today
+            abs_type = days.get(day)
+
+            if abs_type:
+                bg2, fg2, letter = TYPE_STYLE.get(abs_type, ("#f1f5f9", "#64748b", "?"))
+                inner = (
+                    '<div style="width:24px;height:24px;margin:1px auto;border-radius:4px;'
+                    'background:{bg};border:1px solid {fg}55;'
+                    'display:flex;align-items:center;justify-content:center;'
+                    'font-size:10px;font-weight:800;color:{fg}">{lt}</div>'
+                ).format(bg=bg2, fg=fg2, lt=letter)
+            elif is_hol:
+                inner = '<div style="text-align:center;font-size:12px;color:#f59e0b;line-height:2">⭑</div>'
+            elif is_wknd:
+                inner = '<div style="width:24px;height:4px;margin:10px auto;background:#e2e8f0;border-radius:2px"></div>'
+            else:
+                inner = ''
+
+            today_border = "border-left:2px solid #93c5fd;border-right:2px solid #93c5fd;" if is_today else ""
+            cell_bg = "#eff6ff" if is_today else ("#f1f5f9" if is_wknd or is_hol else row_bg)
+            parts.append(
+                '<td style="text-align:center;padding:3px 2px;{tb}background:{cb};'
+                'border-bottom:1px solid #f1f5f9">{inner}</td>'.format(
+                    tb=today_border, cb=cell_bg, inner=inner
+                )
+            )
+        parts.append('</tr>')
+
+    parts.append('</tbody></table></div>')
+
+    # Souhrn dní v měsíci
+    type_totals = {}
+    for a in absences:
+        t  = a["absence_type"]
+        af = max(date.fromisoformat(a["date_from"]), first)
+        at = min(date.fromisoformat(a["date_to"]),   last)
+        type_totals[t] = type_totals.get(t, 0) + count_workdays_in_range(af, at)
+
+    sum_parts = ['<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:18px">']
+    labels_map = [
+        ("vacation", "#dbeafe", "#1d4ed8", "🏖 Dovolená"),
+        ("sickday",  "#fee2e2", "#991b1b", "🤒 Sickday"),
+        ("nemoc",    "#ffe4e6", "#9f1239", "🏥 Nemoc/PN"),
+    ]
+    for typ, bg2, fg2, label in labels_map:
+        cnt = type_totals.get(typ, 0)
+        sum_parts.append(
+            '<div style="background:{bg};color:{fg};border-radius:8px;'
+            'padding:8px 16px;font-size:13px;font-weight:700">{label} · {cnt} dní</div>'.format(
+                bg=bg2, fg=fg2, label=label, cnt=cnt
+            )
+        )
+
+    # Státní svátky v měsíci
+    month_holidays = sorted(d for d in holidays if d.month == month and d.year == year)
+    if month_holidays:
+        hol_names = {
+            (1, 1): "Nový rok", (5, 1): "Svátek práce", (5, 8): "Den vítězství",
+            (7, 5): "Cyril a Metoděj", (7, 6): "Mistr Jan Hus", (9, 28): "Den české státnosti",
+            (10, 28): "Vznik ČSR", (11, 17): "Den boje za svobodu", (12, 24): "Štědrý den",
+            (12, 25): "1. svátek vánoční", (12, 26): "2. svátek vánoční",
+        }
+        for h in month_holidays:
+            name = hol_names.get((h.month, h.day), "Státní svátek")
+            sum_parts.append(
+                '<div style="background:#fef9c3;color:#92400e;border-radius:8px;'
+                'padding:8px 16px;font-size:13px;font-weight:700">⭑ {d}. – {n}</div>'.format(
+                    d=h.day, n=name
+                )
+            )
+    sum_parts.append('</div>')
+    st.markdown("".join(parts) + "".join(sum_parts), unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 init_db()
@@ -1768,6 +2062,7 @@ else:
 
         pages = {
             "📊 Přehled dne":     "dashboard",
+            "📅 Kalendář":        "calendar",
             "🕐 Moje docházka":   "attendance",
             "🏖 Absence":         "absences",
             "✏️ Úpravy záznamu":  "corrections",
@@ -1805,6 +2100,8 @@ else:
         page_corrections()
     elif page == "reports":
         page_reports()
+    elif page == "calendar":
+        page_calendar()
     elif page == "admin" and is_admin:
         page_admin()
 
