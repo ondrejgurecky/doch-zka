@@ -4,36 +4,89 @@ import pandas as pd
 import hashlib
 import os
 import io
+import base64
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, date, timedelta, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # ─────────────────────────────────────────────
-# CONFIG & DB
+# CONFIG
 # ─────────────────────────────────────────────
-DB_PATH = Path(__file__).parent / "dochazka.db"
+DB_PATH   = Path(__file__).parent / "dochazka.db"
+CET       = ZoneInfo("Europe/Prague")
+BASE_DIR  = Path(__file__).parent
 
+# ── E-mail (nastavte dle vašeho SMTP serveru) ─
+SMTP_HOST     = "smtp.gmail.com"
+SMTP_PORT     = 587
+SMTP_USER     = ""           # např. system@eupraha.cz
+SMTP_PASSWORD = ""           # heslo nebo App Password
+EMAIL_FROM    = "Docházkový systém <system@eupraha.cz>"
+EMAIL_ENABLED = False        # True = skutečně odesílat; False = jen zobrazit simulaci
+
+# ─────────────────────────────────────────────
+# CET HELPERS
+# ─────────────────────────────────────────────
+def cet_now() -> datetime:
+    return datetime.now(CET)
+
+def cet_today() -> date:
+    return cet_now().date()
+
+def today_str() -> str:
+    return cet_today().isoformat()
+
+def now_str() -> str:
+    return cet_now().strftime("%H:%M:%S")
+
+# ─────────────────────────────────────────────
+# LOGO HELPERS
+# ─────────────────────────────────────────────
+def _img_b64(path: Path) -> str:
+    if path.exists():
+        return base64.b64encode(path.read_bytes()).decode()
+    return ""
+
+def logo_img_tag(white: bool = False, height: int = 52) -> str:
+    fname  = "logo_bile.png" if white else "logo_modre.png"
+    b64    = _img_b64(BASE_DIR / fname)
+    if b64:
+        mime = "image/png"
+        return f'<img src="data:{mime};base64,{b64}" style="height:{height}px;object-fit:contain;display:block">'
+    # Fallback to hosted URL
+    url = ("https://qtrypzzcjebvfcihiynt.supabase.co/storage/v1/object/public/"
+           "base44-prod/public/699397941a2b8a2014ee9736/"
+           + ("9e23cc13b_logo_bile_bezpozadi.png" if white else "98e058591_logo_modre_bezpozadi1.png"))
+    return f'<img src="{url}" style="height:{height}px;object-fit:contain;display:block">'
+
+def logo_st_path(white: bool = False) -> Path | None:
+    fname = "logo_bile.png" if white else "logo_modre.png"
+    p = BASE_DIR / fname
+    return p if p.exists() else None
+
+# ─────────────────────────────────────────────
+# PAGE CONFIG & CSS
+# ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="Docházkový systém",
-    page_icon="🕐",
+    page_title="Docházkový systém – Exekutorský úřad Praha 4",
+    page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─────────────────────────────────────────────
-# CUSTOM CSS  –  Exekutor Plus brand (light)
-# ─────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&family=Source+Serif+4:wght@600;700&display=swap');
 
-/* ── Tokens ────────────────────────────────── */
 :root {
     --blue-dark:   #1a3a5c;
-    --blue-mid:    #1a6aaa;
-    --blue-bright: #2196c8;
+    --blue-mid:    #1f5e8c;
+    --blue-bright: #158bc8;
     --blue-light:  #e8f3fb;
     --blue-xlight: #f0f7fd;
-    --teal:        #2a9fd6;
     --white:       #ffffff;
     --bg:          #f4f7fa;
     --card-bg:     #ffffff;
@@ -49,282 +102,133 @@ st.markdown("""
     --red-bg:      #fdf0ee;
     --radius:      10px;
     --shadow:      0 2px 8px rgba(26,58,92,.08);
-    --shadow-md:   0 4px 16px rgba(26,58,92,.12);
+    --gradient:    linear-gradient(120deg, #0b5390 0%, #158bc8 81%);
 }
 
 html, body, [class*="css"] {
-    font-family: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif !important;
+    font-family: 'Source Sans 3','Segoe UI',system-ui,sans-serif !important;
     color: var(--text-body);
 }
+.stApp { background: var(--bg) !important; }
+.main .block-container { padding-top: 1.5rem; max-width: 1320px; }
 
-/* ── App background ─────────────────────────── */
-.stApp {
-    background: var(--bg) !important;
-}
-.main .block-container {
-    padding-top: 2rem;
-    max-width: 1280px;
-}
-
-/* ── Sidebar ────────────────────────────────── */
+/* ── Sidebar ── */
 [data-testid="stSidebar"] {
     background: var(--white) !important;
     border-right: 1px solid var(--border) !important;
 }
-[data-testid="stSidebar"] * {
-    color: var(--text-body) !important;
-}
+[data-testid="stSidebar"] * { color: var(--text-body) !important; }
 [data-testid="stSidebar"] .stButton > button {
-    background: transparent !important;
-    color: var(--text-body) !important;
-    border: none !important;
-    border-radius: 8px !important;
-    text-align: left !important;
-    font-size: 0.9rem !important;
-    font-weight: 500 !important;
-    padding: 9px 14px !important;
-    transition: all .15s !important;
+    background: transparent !important; color: var(--text-body) !important;
+    border: none !important; border-radius: 8px !important;
+    text-align: left !important; font-size: .9rem !important;
+    font-weight: 500 !important; padding: 9px 14px !important; transition: all .15s !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-    background: var(--blue-xlight) !important;
-    color: var(--blue-mid) !important;
+    background: var(--blue-xlight) !important; color: var(--blue-mid) !important;
 }
 [data-testid="stSidebar"] .stButton > button[kind="primary"] {
-    background: var(--blue-mid) !important;
-    color: var(--white) !important;
-    font-weight: 600 !important;
+    background: var(--blue-mid) !important; color: var(--white) !important; font-weight: 600 !important;
 }
 
-/* ── Page header banner ─────────────────────── */
+/* ── Page header ── */
 .page-header {
-    background: linear-gradient(135deg, var(--blue-dark) 0%, var(--blue-bright) 100%);
-    border-radius: var(--radius);
-    padding: 28px 32px 26px;
-    margin-bottom: 28px;
-    position: relative;
-    overflow: hidden;
+    background: var(--gradient);
+    border-radius: var(--radius); padding: 26px 32px;
+    margin-bottom: 28px; position: relative; overflow: hidden;
 }
 .page-header::before {
-    content: '';
-    position: absolute;
-    top: -40px; right: -40px;
-    width: 200px; height: 200px;
-    background: rgba(255,255,255,.05);
-    border-radius: 50%;
+    content:''; position:absolute; top:-40px; right:-40px;
+    width:220px; height:220px; background:rgba(255,255,255,.05); border-radius:50%;
 }
 .page-header h1 {
-    font-family: 'Source Serif 4', Georgia, serif;
-    font-size: 1.7rem;
-    font-weight: 700;
-    color: #ffffff !important;
-    margin: 0 0 4px 0;
-    line-height: 1.2;
+    font-family:'Source Serif 4',Georgia,serif; font-size:1.65rem;
+    font-weight:700; color:#fff !important; margin:0 0 4px; line-height:1.2;
 }
-.page-header p {
-    font-size: 0.9rem;
-    color: rgba(255,255,255,.75);
-    margin: 0;
-}
+.page-header p { font-size:.88rem; color:rgba(255,255,255,.75); margin:0; }
 
-/* ── Stat cards ──────────────────────────────── */
+/* ── Cards ── */
 .card {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px 22px;
-    margin-bottom: 14px;
-    box-shadow: var(--shadow);
+    background:var(--card-bg); border:1px solid var(--border);
+    border-radius:var(--radius); padding:18px 22px;
+    margin-bottom:12px; box-shadow:var(--shadow);
 }
-.card-green  { border-left: 4px solid #1e8c5a; }
-.card-yellow { border-left: 4px solid #c97b10; }
-.card-red    { border-left: 4px solid #c0392b; }
-.card-blue   { border-left: 4px solid var(--blue-mid); }
-.card-gray   { border-left: 4px solid #8fa8bf; }
+.card-green  { border-left:4px solid #1e8c5a; }
+.card-yellow { border-left:4px solid #c97b10; }
+.card-red    { border-left:4px solid #c0392b; }
+.card-blue   { border-left:4px solid var(--blue-mid); }
+.card-gray   { border-left:4px solid #8fa8bf; }
+.card h3 { margin:0 0 6px; font-size:.72rem; color:var(--text-muted); font-weight:700; letter-spacing:.07em; text-transform:uppercase; }
+.card .value { font-size:1.85rem; font-weight:700; color:var(--text-dark); font-variant-numeric:tabular-nums; line-height:1.1; }
+.card .sub   { font-size:.78rem; color:var(--text-muted); margin-top:4px; }
 
-.card h3 {
-    margin: 0 0 6px 0;
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    font-weight: 600;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-}
-.card .value {
-    font-size: 1.9rem;
-    font-weight: 700;
-    color: var(--text-dark);
-    font-variant-numeric: tabular-nums;
-    line-height: 1.1;
-}
-.card .sub { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; }
+/* ── Badges ── */
+.badge { display:inline-block; padding:3px 11px; border-radius:99px; font-size:.72rem; font-weight:700; letter-spacing:.04em; }
+.badge-working  { background:#d4f5e5; color:#145c38; }
+.badge-pause    { background:#fdefd4; color:#8b5500; }
+.badge-sick     { background:#fde8e6; color:#9b2116; }
+.badge-vacation { background:#d6eaf8; color:#1a4f7a; }
+.badge-offline  { background:#eaeef2; color:#5a7a8a; }
+.badge-pending  { background:#fef6e8; color:#8b5500; }
+.badge-approved { background:#d4f5e5; color:#145c38; }
+.badge-rejected { background:#fde8e6; color:#9b2116; }
 
-/* ── Badges ─────────────────────────────────── */
-.badge {
-    display: inline-block;
-    padding: 3px 11px;
-    border-radius: 99px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-}
-.badge-working  { background: #d4f5e5; color: #145c38; }
-.badge-pause    { background: #fdefd4; color: #8b5500; }
-.badge-sick     { background: #fde8e6; color: #9b2116; }
-.badge-vacation { background: #d6eaf8;  color: #1a4f7a; }
-.badge-offline  { background: #eaeef2; color: #5a7a8a; }
-
-/* ── Person rows ────────────────────────────── */
+/* ── Person rows ── */
 .person-row {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 11px 16px;
-    background: var(--white);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-bottom: 7px;
-    box-shadow: var(--shadow);
+    display:flex; align-items:center; gap:14px; padding:11px 16px;
+    background:var(--white); border:1px solid var(--border);
+    border-radius:var(--radius); margin-bottom:7px; box-shadow:var(--shadow);
 }
 .avatar {
-    width: 38px; height: 38px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: 0.9rem;
-    flex-shrink: 0;
-    border: 2px solid rgba(255,255,255,.6);
+    width:38px; height:38px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:.9rem; flex-shrink:0;
 }
-.person-row .name   { font-weight: 600; font-size: 0.92rem; color: var(--text-dark); }
-.person-row .detail { font-size: 0.77rem; color: var(--text-muted); }
+.person-row .name   { font-weight:600; font-size:.92rem; color:var(--text-dark); }
+.person-row .detail { font-size:.77rem; color:var(--text-muted); }
 
-/* ── Buttons ─────────────────────────────────── */
+/* ── Buttons ── */
 .stButton > button {
-    background: var(--white);
-    color: var(--blue-mid);
-    border: 1.5px solid var(--border);
-    border-radius: 8px;
-    font-family: 'Source Sans 3', sans-serif;
-    font-weight: 600;
-    font-size: 0.88rem;
-    transition: all .15s;
+    background:var(--white); color:var(--blue-mid);
+    border:1.5px solid var(--border); border-radius:8px;
+    font-family:'Source Sans 3',sans-serif; font-weight:600;
+    font-size:.88rem; transition:all .15s;
 }
-.stButton > button:hover {
-    background: var(--blue-xlight);
-    border-color: var(--blue-mid);
-    color: var(--blue-dark);
-}
+.stButton > button:hover { background:var(--blue-xlight); border-color:var(--blue-mid); color:var(--blue-dark); }
 .stButton > button[kind="primary"] {
-    background: var(--blue-mid) !important;
-    color: #ffffff !important;
-    border-color: var(--blue-mid) !important;
+    background:var(--blue-mid) !important; color:#fff !important; border-color:var(--blue-mid) !important;
 }
-.stButton > button[kind="primary"]:hover {
-    background: var(--blue-dark) !important;
-    border-color: var(--blue-dark) !important;
-}
+.stButton > button[kind="primary"]:hover { background:var(--blue-dark) !important; border-color:var(--blue-dark) !important; }
+.btn-green  > button { border-color:var(--green)  !important; color:var(--green)  !important; background:var(--green-bg)  !important; }
+.btn-red    > button { border-color:var(--red)    !important; color:var(--red)    !important; background:var(--red-bg)    !important; }
+.btn-yellow > button { border-color:var(--orange) !important; color:var(--orange) !important; background:var(--orange-bg) !important; }
+.btn-green  > button:hover { background:#c8f0e0 !important; }
+.btn-red    > button:hover { background:#f8d8d4 !important; }
+.btn-yellow > button:hover { background:#fde8c4 !important; }
 
-.btn-green  > button { border-color: var(--green)  !important; color: var(--green)  !important; background: var(--green-bg)  !important; }
-.btn-red    > button { border-color: var(--red)    !important; color: var(--red)    !important; background: var(--red-bg)    !important; }
-.btn-yellow > button { border-color: var(--orange) !important; color: var(--orange) !important; background: var(--orange-bg) !important; }
-.btn-blue   > button { border-color: var(--blue-mid) !important; color: var(--white) !important; background: var(--blue-mid) !important; }
-
-.btn-green  > button:hover { background: #c8f0e0 !important; }
-.btn-red    > button:hover { background: #f8d8d4 !important; }
-.btn-yellow > button:hover { background: #fde8c4 !important; }
-.btn-blue   > button:hover { background: var(--blue-dark) !important; }
-
-/* ── Divider ─────────────────────────────────── */
-hr { border-color: var(--border) !important; }
-
-/* ── Inputs / selects ───────────────────────── */
-.stTextInput input,
-.stSelectbox > div,
-.stDateInput input {
-    background: var(--white) !important;
-    border: 1.5px solid var(--border) !important;
-    border-radius: 8px !important;
-    color: var(--text-dark) !important;
+/* ── Misc ── */
+hr { border-color:var(--border) !important; }
+.stTextInput input, .stSelectbox > div, .stDateInput input, .stTextArea textarea {
+    background:var(--white) !important; border:1.5px solid var(--border) !important;
+    border-radius:8px !important; color:var(--text-dark) !important;
 }
-.stTextInput input:focus,
-.stSelectbox > div:focus-within {
-    border-color: var(--blue-mid) !important;
-    box-shadow: 0 0 0 3px rgba(26,106,170,.12) !important;
+label, .stSelectbox label, .stTextInput label, .stDateInput label, .stTextArea label {
+    color:var(--text-body) !important; font-weight:600 !important; font-size:.84rem !important;
 }
-label, .stSelectbox label, .stTextInput label, .stDateInput label {
-    color: var(--text-body) !important;
-    font-weight: 600 !important;
-    font-size: 0.84rem !important;
-}
-
-/* ── Tabs ────────────────────────────────────── */
-.stTabs [data-baseweb="tab-list"] {
-    background: transparent;
-    border-bottom: 2px solid var(--border);
-    gap: 0;
-}
+.stTabs [data-baseweb="tab-list"] { background:transparent; border-bottom:2px solid var(--border); gap:0; }
 .stTabs [data-baseweb="tab"] {
-    background: transparent;
-    color: var(--text-muted);
-    font-weight: 600;
-    font-size: 0.87rem;
-    border-bottom: 2px solid transparent;
-    padding: 10px 18px;
-    margin-bottom: -2px;
+    background:transparent; color:var(--text-muted); font-weight:600;
+    font-size:.87rem; border-bottom:2px solid transparent; padding:10px 18px; margin-bottom:-2px;
 }
-.stTabs [aria-selected="true"] {
-    color: var(--blue-mid) !important;
-    border-bottom: 2px solid var(--blue-mid) !important;
-    background: transparent !important;
-}
-
-/* ── Dataframe ───────────────────────────────── */
-.stDataFrame {
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius) !important;
-    overflow: hidden;
-}
-
-/* ── Alerts ──────────────────────────────────── */
-.stAlert {
-    border-radius: var(--radius) !important;
-}
-.stSuccess { background: var(--green-bg) !important; color: var(--green) !important; border-color: #a8dfc6 !important; }
-.stWarning { background: var(--orange-bg) !important; color: var(--orange) !important; }
-.stError   { background: var(--red-bg) !important; color: var(--red) !important; }
-.stInfo    { background: var(--blue-xlight) !important; color: var(--blue-dark) !important; }
-
-/* ── Expander ─────────────────────────────────── */
+.stTabs [aria-selected="true"] { color:var(--blue-mid) !important; border-bottom:2px solid var(--blue-mid) !important; background:transparent !important; }
+.stDataFrame { border:1px solid var(--border) !important; border-radius:var(--radius) !important; overflow:hidden; }
+.stSuccess { background:var(--green-bg) !important; color:var(--green) !important; border-color:#a8dfc6 !important; }
+.stInfo    { background:var(--blue-xlight) !important; color:var(--blue-dark) !important; }
 .streamlit-expanderHeader {
-    background: var(--white) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-    color: var(--text-dark) !important;
-    font-weight: 600 !important;
+    background:var(--white) !important; border:1px solid var(--border) !important;
+    border-radius:8px !important; color:var(--text-dark) !important; font-weight:600 !important;
 }
-
-/* ── Sidebar brand block ─────────────────────── */
-.sidebar-brand {
-    background: linear-gradient(135deg, var(--blue-dark), var(--blue-bright));
-    border-radius: var(--radius);
-    padding: 18px 16px 16px;
-    margin-bottom: 20px;
-    text-align: center;
-}
-.sidebar-brand .brand-icon { font-size: 2rem; line-height: 1; }
-.sidebar-brand .brand-title {
-    font-family: 'Source Serif 4', serif;
-    font-size: 0.85rem;
-    font-weight: 700;
-    color: rgba(255,255,255,.9);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    margin-top: 6px;
-}
-.sidebar-brand .brand-sub {
-    font-size: 0.72rem;
-    color: rgba(255,255,255,.6);
-    margin-top: 2px;
-}
-.sidebar-divider { height: 1px; background: var(--border); margin: 16px 0; }
+.sidebar-divider { height:1px; background:var(--border); margin:14px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -346,10 +250,9 @@ def init_db():
             password_hash TEXT NOT NULL,
             display_name TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'user',
-            color TEXT DEFAULT '#3b82f6',
+            color TEXT DEFAULT '#1f5e8c',
             active INTEGER DEFAULT 1
         );
-
         CREATE TABLE IF NOT EXISTS attendance (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -358,7 +261,6 @@ def init_db():
             checkout_time TEXT,
             FOREIGN KEY(user_id) REFERENCES users(id)
         );
-
         CREATE TABLE IF NOT EXISTS pauses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             attendance_id INTEGER NOT NULL,
@@ -367,7 +269,6 @@ def init_db():
             end_time TEXT,
             FOREIGN KEY(attendance_id) REFERENCES attendance(id)
         );
-
         CREATE TABLE IF NOT EXISTS absences (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -376,15 +277,40 @@ def init_db():
             date_to TEXT NOT NULL,
             note TEXT,
             approved INTEGER DEFAULT 0,
+            email_sent INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS time_corrections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            orig_in TEXT,
+            orig_out TEXT,
+            orig_break_start TEXT,
+            orig_break_end TEXT,
+            req_in TEXT NOT NULL,
+            req_out TEXT NOT NULL,
+            req_break_start TEXT,
+            req_break_end TEXT,
+            reason TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            admin_note TEXT,
+            created_at TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id)
         );
         """)
-        # Seed admin if none exists
+        # email_sent column migration for existing DBs
+        try:
+            conn.execute("ALTER TABLE absences ADD COLUMN email_sent INTEGER DEFAULT 0")
+            conn.commit()
+        except Exception:
+            pass
+        # Seed admin
         row = conn.execute("SELECT id FROM users WHERE role='admin'").fetchone()
         if not row:
             conn.execute(
-                "INSERT INTO users(username, password_hash, display_name, role, color) VALUES(?,?,?,?,?)",
-                ("admin", hash_pw("admin123"), "Administrátor", "admin", "#ef4444")
+                "INSERT INTO users(username,password_hash,display_name,role,color) VALUES(?,?,?,?,?)",
+                ("admin", hash_pw("admin123"), "Administrátor", "admin", "#1f5e8c")
             )
             conn.commit()
 
@@ -402,13 +328,15 @@ def authenticate(username: str, password: str):
 
 def get_all_users():
     with get_conn() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM users WHERE active=1 ORDER BY display_name").fetchall()]
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM users WHERE active=1 ORDER BY display_name"
+        ).fetchall()]
 
 def create_user(username, password, display_name, role, color):
     try:
         with get_conn() as conn:
             conn.execute(
-                "INSERT INTO users(username, password_hash, display_name, role, color) VALUES(?,?,?,?,?)",
+                "INSERT INTO users(username,password_hash,display_name,role,color) VALUES(?,?,?,?,?)",
                 (username, hash_pw(password), display_name, role, color)
             )
             conn.commit()
@@ -421,19 +349,17 @@ def update_user_password(user_id, new_password):
         conn.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(new_password), user_id))
         conn.commit()
 
+def update_user_name(user_id, new_name: str):
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET display_name=? WHERE id=?", (new_name.strip(), user_id))
+        conn.commit()
+
 def deactivate_user(user_id):
     with get_conn() as conn:
         conn.execute("UPDATE users SET active=0 WHERE id=?", (user_id,))
         conn.commit()
 
-# ── Attendance helpers ──
-
-def today_str():
-    return date.today().isoformat()
-
-def now_str():
-    return datetime.now().strftime("%H:%M:%S")
-
+# ── Attendance ──
 def get_attendance(user_id, day=None):
     if day is None:
         day = today_str()
@@ -450,7 +376,7 @@ def ensure_attendance(user_id, day=None):
         return row["id"]
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO attendance(user_id, date) VALUES(?,?)", (user_id, day)
+            "INSERT INTO attendance(user_id,date) VALUES(?,?)", (user_id, day)
         )
         conn.commit()
         return cur.lastrowid
@@ -471,7 +397,6 @@ def do_checkout(user_id):
         return False, "Nejprve zaznamenejte příchod."
     if att["checkout_time"]:
         return False, "Odchod byl již zaznamenán."
-    # Close any open pauses
     close_open_pauses(att["id"])
     with get_conn() as conn:
         conn.execute("UPDATE attendance SET checkout_time=? WHERE id=?", (now_str(), att["id"]))
@@ -491,7 +416,7 @@ def open_pause(att_id, pause_type):
             return False, "Existuje nezavřená pauza."
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO pauses(attendance_id, pause_type, start_time) VALUES(?,?,?)",
+            "INSERT INTO pauses(attendance_id,pause_type,start_time) VALUES(?,?,?)",
             (att_id, pause_type, now_str())
         )
         conn.commit()
@@ -517,11 +442,10 @@ def end_pause(att_id):
     return True, "Pauza ukončena ✓"
 
 # ── Absences ──
-
 def request_absence(user_id, absence_type, date_from, date_to, note=""):
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO absences(user_id, absence_type, date_from, date_to, note) VALUES(?,?,?,?,?)",
+            "INSERT INTO absences(user_id,absence_type,date_from,date_to,note) VALUES(?,?,?,?,?)",
             (user_id, absence_type, date_from.isoformat(), date_to.isoformat(), note)
         )
         conn.commit()
@@ -543,18 +467,103 @@ def get_user_absences(user_id):
             "SELECT * FROM absences WHERE user_id=? ORDER BY date_from DESC", (user_id,)
         ).fetchall()]
 
-def approve_absence(absence_id, approve: bool):
+def approve_absence(absence_id: int, approve: bool, user_email: str = "", user_name: str = ""):
+    val = 1 if approve else -1
     with get_conn() as conn:
-        conn.execute("UPDATE absences SET approved=? WHERE id=?", (1 if approve else -1, absence_id))
+        conn.execute("UPDATE absences SET approved=? WHERE id=?", (val, absence_id))
         conn.commit()
+        ab = dict(conn.execute("SELECT * FROM absences WHERE id=?", (absence_id,)).fetchone())
+
+    email_sent = False
+    if approve and user_email:
+        email_sent = send_absence_email(user_email, user_name, ab)
+        if email_sent:
+            with get_conn() as conn:
+                conn.execute("UPDATE absences SET email_sent=1 WHERE id=?", (absence_id,))
+                conn.commit()
+    return email_sent
 
 def delete_absence(absence_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM absences WHERE id=?", (absence_id,))
         conn.commit()
 
-# ── Time calculations ──
+# ── Time corrections ──
+def request_correction(user_id, d, orig_in, orig_out, orig_bs, orig_be,
+                        req_in, req_out, req_bs, req_be, reason):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO time_corrections
+               (user_id,date,orig_in,orig_out,orig_break_start,orig_break_end,
+                req_in,req_out,req_break_start,req_break_end,reason,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (user_id, d, orig_in, orig_out, orig_bs, orig_be,
+             req_in, req_out, req_bs, req_be, reason, cet_now().isoformat())
+        )
+        conn.commit()
 
+def get_user_corrections(user_id):
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM time_corrections WHERE user_id=? ORDER BY created_at DESC", (user_id,)
+        ).fetchall()]
+
+def get_pending_corrections():
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT tc.*, u.display_name, u.email FROM time_corrections tc
+               JOIN users u ON tc.user_id=u.id
+               WHERE tc.status='pending' ORDER BY tc.created_at""",
+        ).fetchall()]
+
+def resolve_correction(correction_id: int, approve: bool, admin_note: str = ""):
+    status = "approved" if approve else "rejected"
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE time_corrections SET status=?, admin_note=? WHERE id=?",
+            (status, admin_note, correction_id)
+        )
+        conn.commit()
+
+# ── E-mail ──
+def send_absence_email(to_email: str, to_name: str, absence: dict) -> bool:
+    type_cz = "Dovolená" if absence["absence_type"] == "vacation" else "Sickday / Nemoc"
+    date_str = absence["date_from"] if absence["date_from"] == absence["date_to"] \
+               else f"{absence['date_from']} – {absence['date_to']}"
+    note_str = f"\nPoznámka: {absence['note']}" if absence.get("note") else ""
+
+    subject = f"[Docházkový systém] Vaše žádost o absenci byla schválena"
+    body = (f"Dobrý den, {to_name},\n\n"
+            f"Vaše žádost o absenci byla schválena.\n\n"
+            f"Typ:    {type_cz}\n"
+            f"Datum:  {date_str}{note_str}\n\n"
+            f"S pozdravem,\n"
+            f"Docházkový systém – Exekutorský úřad Praha 4\n"
+            f"urad@eupraha.cz | +420 241 434 045")
+
+    if not EMAIL_ENABLED:
+        # Simulace – uložíme do session_state pro zobrazení
+        st.session_state.setdefault("email_log", []).append({
+            "to": to_email, "subject": subject, "body": body
+        })
+        return True  # považujeme za "odesláno" (simulace)
+
+    try:
+        msg = MIMEMultipart()
+        msg["From"]    = EMAIL_FROM
+        msg["To"]      = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASSWORD)
+            s.sendmail(EMAIL_FROM, to_email, msg.as_string())
+        return True
+    except Exception as e:
+        st.warning(f"Email se nepodařilo odeslat: {e}")
+        return False
+
+# ── Time helpers ──
 def time_to_seconds(t_str: str) -> int:
     if not t_str:
         return 0
@@ -564,9 +573,7 @@ def time_to_seconds(t_str: str) -> int:
 
 def seconds_to_hm(seconds: int) -> str:
     seconds = max(0, seconds)
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    return f"{h}h {m:02d}m"
+    return f"{seconds // 3600}h {(seconds % 3600) // 60:02d}m"
 
 def calc_worked_seconds(att, pauses):
     if not att or not att["checkin_time"]:
@@ -579,11 +586,9 @@ def calc_worked_seconds(att, pauses):
     return max(0, total)
 
 def is_weekend(day_str: str) -> bool:
-    d = date.fromisoformat(day_str)
-    return d.weekday() >= 5
+    return date.fromisoformat(day_str).weekday() >= 5
 
 def get_month_stats(user_id, year: int, month: int):
-    """Returns worked seconds per day, separating weekday vs weekend."""
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM attendance WHERE user_id=? AND strftime('%Y',date)=? AND strftime('%m',date)=?",
@@ -595,28 +600,20 @@ def get_month_stats(user_id, year: int, month: int):
         pauses = get_pauses(att["id"])
         worked = calc_worked_seconds(att, pauses) if att["checkin_time"] else 0
         results.append({
-            "date": att["date"],
-            "checkin": att["checkin_time"] or "",
+            "date": att["date"], "checkin": att["checkin_time"] or "",
             "checkout": att["checkout_time"] or "",
-            "worked_seconds": worked,
-            "is_weekend": is_weekend(att["date"]),
+            "worked_seconds": worked, "is_weekend": is_weekend(att["date"]),
         })
     return results
 
 def count_workdays_so_far(year: int, month: int) -> int:
-    today = date.today()
+    today = cet_today()
     first = date(year, month, 1)
-    # last day of month or today
     if year == today.year and month == today.month:
         last = today
     else:
-        # last day of month
-        if month == 12:
-            last = date(year + 1, 1, 1) - timedelta(days=1)
-        else:
-            last = date(year, month + 1, 1) - timedelta(days=1)
-    count = 0
-    d = first
+        last = (date(year, month + 1, 1) - timedelta(days=1)) if month < 12 else date(year, 12, 31)
+    count, d = 0, first
     while d <= last:
         if d.weekday() < 5:
             count += 1
@@ -624,19 +621,14 @@ def count_workdays_so_far(year: int, month: int) -> int:
     return count
 
 def get_status_overview():
-    """Returns list of users with their today's status."""
     today = today_str()
     users = get_all_users()
     absences = get_absences_for_date(today)
     absent_ids = {a["user_id"]: a for a in absences}
-
     result = []
     for u in users:
         uid = u["id"]
-        status = "offline"
-        detail = ""
-        checkin = None
-
+        status, detail, checkin = "offline", "", None
         if uid in absent_ids:
             ab = absent_ids[uid]
             status = ab["absence_type"]
@@ -645,72 +637,67 @@ def get_status_overview():
             att = get_attendance(uid, today)
             if att:
                 if att["checkin_time"] and not att["checkout_time"]:
-                    pauses = get_pauses(att["id"])
-                    open_p = [p for p in pauses if p["end_time"] is None]
-                    if open_p:
-                        status = "pause"
-                        detail = open_p[0]["pause_type"]
-                    else:
-                        status = "working"
+                    open_p = [p for p in get_pauses(att["id"]) if p["end_time"] is None]
+                    status  = "pause" if open_p else "working"
+                    detail  = open_p[0]["pause_type"] if open_p else ""
                     checkin = att["checkin_time"][:5]
                 elif att["checkout_time"]:
-                    status = "done"
+                    status  = "done"
                     checkin = att["checkin_time"][:5] if att["checkin_time"] else ""
-                    detail = f"odešel {att['checkout_time'][:5]}"
-
+                    detail  = f"odešel {att['checkout_time'][:5]}"
         result.append({**u, "status": status, "detail": detail, "checkin": checkin})
     return result
 
 # ─────────────────────────────────────────────
 # UI HELPERS
 # ─────────────────────────────────────────────
-AVATAR_COLORS = ["#3b82f6","#8b5cf6","#ec4899","#14b8a6","#f97316","#22c55e","#ef4444","#eab308"]
-
-def avatar_html(name: str, color: str = "#1a6aaa") -> str:
+def avatar_html(name: str, color: str = "#1f5e8c") -> str:
     initials = "".join([w[0].upper() for w in name.split()[:2]])
-    # lighter tint bg, solid color text
-    return f'<div class="avatar" style="background:{color}22;color:{color};border:2px solid {color}44">{initials}</div>'
+    return f'<div class="avatar" style="background:{color}22;color:{color};border:2px solid {color}55">{initials}</div>'
 
 STATUS_LABEL = {
-    "working": ("Pracuje", "working"),
-    "pause": ("Pauza", "pause"),
+    "working": ("Pracuje",   "working"),
+    "pause":   ("Pauza",     "pause"),
     "sickday": ("Nemocný/á", "sick"),
-    "vacation": ("Dovolená", "vacation"),
-    "offline": ("Offline", "offline"),
-    "done": ("Skončil/a", "offline"),
+    "vacation":("Dovolená",  "vacation"),
+    "offline": ("Offline",   "offline"),
+    "done":    ("Skončil/a", "offline"),
 }
-
 PAUSE_TYPES = ["🍽 Oběd", "🏥 Doktor", "☕ Přestávka", "📦 Jiné"]
+MONTH_NAMES = ["Leden","Únor","Březen","Duben","Květen","Červen",
+               "Červenec","Srpen","Září","Říjen","Listopad","Prosinec"]
+
+def status_badge(status: str) -> str:
+    label, cls = STATUS_LABEL.get(status, ("", "offline"))
+    return f'<span class="badge badge-{cls}">{label}</span>'
+
+def correction_status_badge(status: str) -> str:
+    labels = {"pending": ("⏳ Čeká", "pending"), "approved": ("✅ Schváleno", "approved"), "rejected": ("❌ Zamítnuto", "rejected")}
+    label, cls = labels.get(status, ("?", "offline"))
+    return f'<span class="badge badge-{cls}">{label}</span>'
+
 
 # ─────────────────────────────────────────────
 # PAGE: LOGIN
 # ─────────────────────────────────────────────
 def page_login():
-    # Full-page gradient background for login
     st.markdown("""<style>
-    .stApp { background: linear-gradient(135deg, #1a3a5c 0%, #2196c8 100%) !important; }
+    .stApp { background: linear-gradient(120deg,#0b5390 0%,#158bc8 81%) !important; }
     .main .block-container { padding-top: 4rem; }
     </style>""", unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 1.2, 1])
-    with col2:
-        st.markdown("""
-        <div style="background:#fff;border-radius:14px;padding:36px 36px 28px;
-                    box-shadow:0 8px 40px rgba(26,58,92,.28);text-align:center;margin-bottom:0">
-            <div style="font-size:2.4rem;margin-bottom:8px">🏛️</div>
-            <div style="font-family:'Source Serif 4',Georgia,serif;font-size:1.1rem;
-                        font-weight:700;color:#1a3a5c;letter-spacing:.04em;
-                        text-transform:uppercase;margin-bottom:2px">
-                Docházkový systém
-            </div>
-            <div style="font-size:0.78rem;color:#7a93ab;margin-bottom:24px">
-                Exekutorský úřad Praha 4
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    _, col, _ = st.columns([1, 1.1, 1])
+    with col:
+        st.markdown(f"""
+        <div style="background:#fff;border-radius:14px 14px 0 0;padding:32px 36px 20px;
+                    box-shadow:0 8px 40px rgba(11,83,144,.35);text-align:center">
+            {logo_img_tag(white=False, height=56)}
+            <div style="height:16px"></div>
+            <div style="font-size:.78rem;color:#7a93ab">Docházkový systém – Exekutorský úřad Praha 4</div>
+        </div>""", unsafe_allow_html=True)
 
         with st.container():
-            st.markdown('<div style="background:#fff;border-radius:0 0 14px 14px;padding:0 36px 28px;box-shadow:0 8px 40px rgba(26,58,92,.28);">', unsafe_allow_html=True)
+            st.markdown('<div style="background:#fff;border-radius:0 0 14px 14px;padding:4px 36px 32px;box-shadow:0 8px 40px rgba(11,83,144,.35);">', unsafe_allow_html=True)
             with st.form("login_form"):
                 username = st.text_input("Uživatelské jméno", placeholder="jmeno.prijmeni")
                 password = st.text_input("Heslo", type="password", placeholder="••••••••")
@@ -725,106 +712,102 @@ def page_login():
             else:
                 st.error("Nesprávné přihlašovací údaje.")
 
-        st.markdown('<p style="text-align:center;color:rgba(255,255,255,.4);font-size:0.75rem;margin-top:20px">Výchozí admin: admin / admin123</p>', unsafe_allow_html=True)
+        st.markdown('<p style="text-align:center;color:rgba(255,255,255,.45);font-size:.75rem;margin-top:18px">Výchozí admin: admin / admin123</p>', unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────
-# PAGE: DASHBOARD (today overview)
+# PAGE: DASHBOARD
 # ─────────────────────────────────────────────
 def page_dashboard():
+    today_cet = cet_today()
     st.markdown(f"""<div class="page-header">
         <h1>📊 Přehled dne</h1>
-        <p>{date.today().strftime("%A, %d. %m. %Y")}</p>
+        <p>{today_cet.strftime("%-d. %-m. %Y")} · čas CET: {cet_now().strftime("%H:%M")}</p>
     </div>""", unsafe_allow_html=True)
 
     overview = get_status_overview()
-
-    working   = [u for u in overview if u["status"] == "working"]
-    paused    = [u for u in overview if u["status"] == "pause"]
-    sick      = [u for u in overview if u["status"] == "sickday"]
-    vacation  = [u for u in overview if u["status"] == "vacation"]
-    done      = [u for u in overview if u["status"] == "done"]
-    offline   = [u for u in overview if u["status"] == "offline"]
+    working  = [u for u in overview if u["status"] == "working"]
+    paused   = [u for u in overview if u["status"] == "pause"]
+    sick     = [u for u in overview if u["status"] == "sickday"]
+    vacation = [u for u in overview if u["status"] == "vacation"]
+    done     = [u for u in overview if u["status"] == "done"]
+    offline  = [u for u in overview if u["status"] == "offline"]
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(f"""<div class="card card-green">
-            <h3>Pracují</h3><div class="value">{len(working)}</div>
+        st.markdown(f"""<div class="card card-green"><h3>Pracují</h3>
+            <div class="value">{len(working)}</div>
             <div class="sub">{len(paused)} na pauze</div></div>""", unsafe_allow_html=True)
     with c2:
-        st.markdown(f"""<div class="card card-red">
-            <h3>Nemocní</h3><div class="value">{len(sick)}</div>
-            <div class="sub">sickday / nemoc</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="card card-red"><h3>Nemocní</h3>
+            <div class="value">{len(sick)}</div><div class="sub">sickday / PN</div></div>""", unsafe_allow_html=True)
     with c3:
-        st.markdown(f"""<div class="card card-blue">
-            <h3>Dovolená</h3><div class="value">{len(vacation)}</div>
-            <div class="sub">volno</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="card card-blue"><h3>Dovolená</h3>
+            <div class="value">{len(vacation)}</div><div class="sub">schválené volno</div></div>""", unsafe_allow_html=True)
     with c4:
-        st.markdown(f"""<div class="card card-gray">
-            <h3>Offline</h3><div class="value">{len(offline) + len(done)}</div>
-            <div class="sub">{len(done)} skončilo</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="card card-gray"><h3>Offline / Odešli</h3>
+            <div class="value">{len(offline) + len(done)}</div>
+            <div class="sub">{len(done)} skončilo dnes</div></div>""", unsafe_allow_html=True)
 
     st.markdown("---")
 
     def render_group(title, users, show_checkin=False):
         if not users:
             return
-        st.markdown(f'<div style="font-size:0.78rem;font-weight:700;color:#7a93ab;letter-spacing:.06em;text-transform:uppercase;margin:16px 0 8px">{title}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:.75rem;font-weight:700;color:#7a93ab;letter-spacing:.06em;text-transform:uppercase;margin:14px 0 8px">{title}</div>', unsafe_allow_html=True)
         for u in users:
-            label, badge_cls = STATUS_LABEL.get(u["status"], ("", "offline"))
-            detail_str = f" · {u['detail']}" if u["detail"] else ""
+            detail_str  = u["detail"] or ""
             checkin_str = f" · od {u['checkin']}" if show_checkin and u.get("checkin") else ""
             st.markdown(f"""
             <div class="person-row">
                 {avatar_html(u['display_name'], u['color'])}
                 <div style="flex:1">
                     <div class="name">{u['display_name']}</div>
-                    <div class="detail">{detail_str.lstrip(' · ')}{checkin_str}</div>
+                    <div class="detail">{detail_str}{checkin_str}</div>
                 </div>
-                <span class="badge badge-{badge_cls}">{label}</span>
+                {status_badge(u['status'])}
             </div>""", unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
 
     col_l, col_r = st.columns(2)
     with col_l:
         render_group("🟢 Pracují", working, show_checkin=True)
         render_group("🟡 Na pauze", paused, show_checkin=True)
     with col_r:
-        render_group("🔴 Sickday", sick)
+        render_group("🔴 Sickday / Nemoc", sick)
         render_group("🔵 Dovolená", vacation)
-        render_group("⚫ Skončili", done)
+        render_group("⚫ Skončili / Offline", done + offline)
+
 
 # ─────────────────────────────────────────────
-# PAGE: MY ATTENDANCE (check-in/out)
+# PAGE: MY ATTENDANCE
 # ─────────────────────────────────────────────
 def page_my_attendance():
     user = st.session_state.user
+    today_cet = cet_today()
     st.markdown(f"""<div class="page-header">
         <h1>🕐 Moje docházka</h1>
-        <p>Dnes: {date.today().strftime("%d. %m. %Y")}</p>
+        <p>Dnes: {today_cet.strftime("%-d. %-m. %Y")} · {cet_now().strftime("%H:%M")} CET</p>
     </div>""", unsafe_allow_html=True)
 
-    # Check today's absence
     absences_today = get_absences_for_date()
     my_absence = next((a for a in absences_today if a["user_id"] == user["id"]), None)
     if my_absence:
-        label = "Sickday" if my_absence["absence_type"] == "sickday" else "Dovolená"
+        label = "Dovolená" if my_absence["absence_type"] == "vacation" else "Sickday / Nemoc"
         st.info(f"ℹ️ Dnes máš nahlášen/o: **{label}**. Docházka se nezaznamenává.")
         return
 
     att = get_attendance(user["id"])
 
-    # ── Status card
+    # Status card
     if att and att["checkin_time"]:
         pauses = get_pauses(att["id"])
-        open_pauses = [p for p in pauses if p["end_time"] is None]
+        open_p = [p for p in pauses if p["end_time"] is None]
         worked = calc_worked_seconds(att, pauses)
-
-        if open_pauses:
-            op = open_pauses[0]
+        if open_p:
             st.markdown(f"""<div class="card card-yellow">
                 <h3>Aktuální stav</h3>
                 <div class="value" style="color:#8b5500">⏸ Pauza</div>
-                <div class="sub">{op['pause_type']} od {op['start_time'][:5]} · odpracováno {seconds_to_hm(worked)}</div>
+                <div class="sub">{open_p[0]['pause_type']} od {open_p[0]['start_time'][:5]} · odpracováno {seconds_to_hm(worked)}</div>
             </div>""", unsafe_allow_html=True)
         elif att["checkout_time"]:
             st.markdown(f"""<div class="card card-gray">
@@ -845,7 +828,7 @@ def page_my_attendance():
             <div class="sub">Ještě jsi nezaznamenal/a příchod</div>
         </div>""", unsafe_allow_html=True)
 
-    # ── Action buttons
+    # Action buttons
     st.markdown("#### Akce")
     if not att or not att["checkin_time"]:
         col1, _ = st.columns([1, 3])
@@ -856,10 +839,9 @@ def page_my_attendance():
                 st.success(msg) if ok else st.warning(msg)
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
-    elif att and att["checkin_time"] and not att["checkout_time"]:
+    elif att["checkin_time"] and not att["checkout_time"]:
         pauses = get_pauses(att["id"])
         open_pauses = [p for p in pauses if p["end_time"] is None]
-
         col1, col2 = st.columns([2, 2])
         with col1:
             if not open_pauses:
@@ -886,85 +868,69 @@ def page_my_attendance():
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Today's pauses history
     if att:
         pauses = get_pauses(att["id"])
         if pauses:
             st.markdown("#### Pauzy dnes")
             for p in pauses:
                 end = p["end_time"][:5] if p["end_time"] else "probíhá…"
-                duration = ""
+                dur = ""
                 if p["end_time"]:
                     secs = time_to_seconds(p["end_time"]) - time_to_seconds(p["start_time"])
-                    duration = f" ({seconds_to_hm(secs)})"
-                st.markdown(f"- **{p['pause_type']}**: {p['start_time'][:5]} – {end}{duration}")
+                    dur = f" ({seconds_to_hm(secs)})"
+                st.markdown(f"- **{p['pause_type']}**: {p['start_time'][:5]} – {end}{dur}")
 
-    # ── Monthly stats
+    # Monthly stats
     st.markdown("---")
     st.markdown("#### Statistiky měsíce")
-    today = date.today()
-
+    today = cet_today()
     col_m, col_y = st.columns([1, 1])
     with col_m:
-        month = st.selectbox("Měsíc", list(range(1, 13)),
-                             index=today.month - 1,
-                             format_func=lambda m: ["Leden","Únor","Březen","Duben","Květen","Červen",
-                                                     "Červenec","Srpen","Září","Říjen","Listopad","Prosinec"][m-1])
+        month = st.selectbox("Měsíc", list(range(1, 13)), index=today.month - 1,
+                             format_func=lambda m: MONTH_NAMES[m-1])
     with col_y:
         year = st.selectbox("Rok", list(range(today.year - 1, today.year + 1)), index=1)
 
     stats = get_month_stats(user["id"], year, month)
     workdays_so_far = count_workdays_so_far(year, month)
-    expected_seconds = workdays_so_far * 8 * 3600
-
-    weekday_seconds = sum(s["worked_seconds"] for s in stats if not s["is_weekend"])
-    weekend_seconds = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
-    total_seconds = weekday_seconds + weekend_seconds
-    diff = weekday_seconds - expected_seconds
+    expected_sec    = workdays_so_far * 8 * 3600
+    wd_sec  = sum(s["worked_seconds"] for s in stats if not s["is_weekend"])
+    we_sec  = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
+    diff    = wd_sec - expected_sec
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(f"""<div class="card card-blue">
-            <h3>Celkem odpracováno</h3>
-            <div class="value" style="color:#1a3a5c">{seconds_to_hm(total_seconds)}</div>
-            <div class="sub">vč. {seconds_to_hm(weekend_seconds)} víkend</div>
-        </div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="card card-blue"><h3>Celkem odpracováno</h3>
+            <div class="value" style="color:#1a3a5c">{seconds_to_hm(wd_sec + we_sec)}</div>
+            <div class="sub">vč. {seconds_to_hm(we_sec)} víkend</div></div>""", unsafe_allow_html=True)
     with c2:
-        st.markdown(f"""<div class="card card-gray">
-            <h3>Fond pracovní doby</h3>
-            <div class="value" style="color:#3a5068">{seconds_to_hm(expected_seconds)}</div>
-            <div class="sub">{workdays_so_far} pracovních dní</div>
-        </div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="card card-gray"><h3>Fond pracovní doby</h3>
+            <div class="value" style="color:#3a5068">{seconds_to_hm(expected_sec)}</div>
+            <div class="sub">{workdays_so_far} pracovních dní</div></div>""", unsafe_allow_html=True)
     with c3:
-        color = "green" if diff >= 0 else "red"
-        val_color = "#145c38" if diff >= 0 else "#9b2116"
-        sign = "+" if diff >= 0 else ""
-        label = "Přesčas" if diff >= 0 else "Deficit"
-        st.markdown(f"""<div class="card card-{color}">
-            <h3>{label}</h3>
-            <div class="value" style="color:{val_color}">{sign}{seconds_to_hm(abs(diff))}</div>
-            <div class="sub">vs. fond {seconds_to_hm(expected_seconds)}</div>
-        </div>""", unsafe_allow_html=True)
+        color    = "green" if diff >= 0 else "red"
+        val_col  = "#145c38" if diff >= 0 else "#9b2116"
+        sign     = "+" if diff >= 0 else ""
+        label    = "Přesčas" if diff >= 0 else "Deficit"
+        st.markdown(f"""<div class="card card-{color}"><h3>{label}</h3>
+            <div class="value" style="color:{val_col}">{sign}{seconds_to_hm(abs(diff))}</div></div>""", unsafe_allow_html=True)
     with c4:
         days_worked = len([s for s in stats if s["worked_seconds"] > 0 and not s["is_weekend"]])
-        avg = (weekday_seconds // days_worked) if days_worked > 0 else 0
-        c = "green" if avg >= 8 * 3600 else "yellow" if avg >= 6 * 3600 else "red"
-        val_c = "#145c38" if avg >= 8*3600 else "#8b5500" if avg >= 6*3600 else "#9b2116"
-        st.markdown(f"""<div class="card card-{c}">
-            <h3>Průměr / den</h3>
-            <div class="value" style="color:{val_c}">{seconds_to_hm(avg)}</div>
-            <div class="sub">z {days_worked} odpracovaných dní</div>
-        </div>""", unsafe_allow_html=True)
+        avg = (wd_sec // days_worked) if days_worked > 0 else 0
+        c  = "green" if avg >= 8*3600 else "yellow" if avg >= 6*3600 else "red"
+        vc = "#145c38" if avg >= 8*3600 else "#8b5500" if avg >= 6*3600 else "#9b2116"
+        st.markdown(f"""<div class="card card-{c}"><h3>Průměr / den</h3>
+            <div class="value" style="color:{vc}">{seconds_to_hm(avg)}</div>
+            <div class="sub">z {days_worked} dní</div></div>""", unsafe_allow_html=True)
 
     if stats:
         df = pd.DataFrame(stats)
-        df["worked"] = df["worked_seconds"].apply(seconds_to_hm)
-        df["typ"] = df["is_weekend"].apply(lambda x: "🏖 Víkend" if x else "📋 Pracovní")
-        df = df[["date", "checkin", "checkout", "worked", "typ"]].rename(columns={
-            "date": "Datum", "checkin": "Příchod", "checkout": "Odchod",
-            "worked": "Odpracováno", "typ": "Typ"
-        })
+        df["Odpracováno"] = df["worked_seconds"].apply(seconds_to_hm)
+        df["Typ"]         = df["is_weekend"].apply(lambda x: "🏖 Víkend" if x else "📋 Pracovní")
+        df = df[["date","checkin","checkout","Odpracováno","Typ"]].rename(
+            columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
         st.dataframe(df, use_container_width=True, hide_index=True)
+
 
 # ─────────────────────────────────────────────
 # PAGE: ABSENCES
@@ -973,255 +939,331 @@ def page_absences():
     user = st.session_state.user
     st.markdown("""<div class="page-header">
         <h1>🏖 Absence</h1>
-        <p>Nahlášení sickday nebo dovolené</p>
+        <p>Nahlášení dovolené nebo sickday – čeká na schválení administrátora</p>
     </div>""", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["➕ Nová žádost", "📋 Moje absence"])
 
     with tab1:
         abs_type = st.selectbox("Typ", ["sickday", "vacation"],
-                                format_func=lambda x: "🤒 Sickday" if x == "sickday" else "🏖 Dovolená")
-
+                                format_func=lambda x: "🤒 Sickday / Nemoc" if x == "sickday" else "🏖 Dovolená")
         if abs_type == "sickday":
-            sick_date = st.date_input("Den nemoci", value=date.today(),
-                                      min_value=date.today() - timedelta(days=30))
-            date_from = sick_date
-            date_to = sick_date
+            sick_date = st.date_input("Den nemoci", value=cet_today(),
+                                      min_value=cet_today() - timedelta(days=30))
+            date_from = date_to = sick_date
         else:
-            col_od, col_do = st.columns(2)
-            with col_od:
-                date_from = st.date_input("Od", value=date.today(),
-                                          min_value=date.today() - timedelta(days=30))
-            with col_do:
-                date_to = st.date_input("Do", value=date.today())
-
+            c1, c2 = st.columns(2)
+            with c1:
+                date_from = st.date_input("Od", value=cet_today())
+            with c2:
+                date_to   = st.date_input("Do", value=cet_today())
         note = st.text_input("Poznámka (nepovinné)")
-
         if st.button("Odeslat žádost", type="primary"):
             if date_to < date_from:
                 st.error("Datum 'Do' musí být stejné nebo pozdější než 'Od'.")
             else:
                 request_absence(user["id"], abs_type, date_from, date_to, note)
-                st.success("Žádost byla odeslána ✓")
+                st.success("Žádost odeslána – čeká na schválení administrátorem ✓")
                 st.rerun()
 
     with tab2:
         absences = get_user_absences(user["id"])
         if not absences:
             st.info("Žádné absence.")
+        type_labels = {"sickday": "🤒 Sickday", "vacation": "🏖 Dovolená"}
+        status_map  = {0: ("⏳ Čeká na schválení", "yellow"), 1: ("✅ Schváleno", "green"), -1: ("❌ Zamítnuto", "red")}
         for a in absences:
-            type_label = "🤒 Sickday" if a["absence_type"] == "sickday" else "🏖 Dovolená"
-            status_map = {0: ("⏳ Čeká na schválení", "yellow"), 1: ("✅ Schváleno", "green"), -1: ("❌ Zamítnuto", "red")}
+            type_label = type_labels.get(a["absence_type"], a["absence_type"])
             status_str, s_color = status_map.get(a["approved"], ("?", "gray"))
-            note_str = f" · {a['note']}" if a["note"] else ""
+            note_str = f" · {a['note']}" if a.get("note") else ""
             date_str = a["date_from"] if a["date_from"] == a["date_to"] else f"{a['date_from']} – {a['date_to']}"
+            email_str = " · ✉ Potvrzení zasláno emailem" if a.get("email_sent") else ""
             st.markdown(f"""<div class="card card-{s_color}">
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                    <div>
-                        <strong style="color:#1a2e4a">{type_label}</strong>
-                        <span style="color:#3a5068"> · {date_str}{note_str}</span><br>
-                        <small style="color:#7a93ab">{status_str}</small>
-                    </div>
-                </div>
+                <strong style="color:#1a2e4a">{type_label}</strong>
+                <span style="color:#3a5068"> · {date_str}{note_str}</span><br>
+                <small style="color:#7a93ab">{status_str}{email_str}</small>
             </div>""", unsafe_allow_html=True)
             if a["approved"] == 0:
-                if st.button(f"Zrušit žádost", key=f"del_abs_{a['id']}"):
+                if st.button("Zrušit žádost", key=f"del_abs_{a['id']}"):
                     delete_absence(a["id"])
                     st.rerun()
 
+
 # ─────────────────────────────────────────────
-# PAGE: ADMIN – REPORTS
+# PAGE: TIME CORRECTIONS
+# ─────────────────────────────────────────────
+def page_corrections():
+    user = st.session_state.user
+    st.markdown("""<div class="page-header">
+        <h1>✏️ Úpravy záznamu</h1>
+        <p>Žádost o opravu příchodu, odchodu nebo pauzy – schvaluje administrátor</p>
+    </div>""", unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["➕ Nová žádost o úpravu", "📋 Moje žádosti"])
+
+    with tab1:
+        st.markdown("Vyplňte datum a požadované časy. Administrátor žádost schválí nebo zamítne.")
+        corr_date = st.date_input("Datum záznamu", value=cet_today(),
+                                   min_value=cet_today() - timedelta(days=60))
+        st.markdown("**Původní časy** (pokud znáte)")
+        oc1, oc2 = st.columns(2)
+        with oc1:
+            orig_in  = st.text_input("Původní příchod", placeholder="08:15", key="orig_in")
+            orig_bs  = st.text_input("Původní začátek pauzy", placeholder="12:00", key="orig_bs")
+        with oc2:
+            orig_out = st.text_input("Původní odchod", placeholder="16:00", key="orig_out")
+            orig_be  = st.text_input("Původní konec pauzy",   placeholder="12:30", key="orig_be")
+
+        st.markdown("**Požadované časy** \\*")
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            req_in  = st.text_input("Požadovaný příchod *", placeholder="07:45", key="req_in")
+            req_bs  = st.text_input("Požadovaný začátek pauzy", placeholder="11:30", key="req_bs")
+        with rc2:
+            req_out = st.text_input("Požadovaný odchod *", placeholder="15:30", key="req_out")
+            req_be  = st.text_input("Požadovaný konec pauzy",   placeholder="12:00", key="req_be")
+
+        reason = st.text_area("Důvod úpravy *", placeholder="Popište důvod požadované opravy záznamu…")
+
+        if st.button("Odeslat žádost o úpravu", type="primary"):
+            if not req_in or not req_out or not reason.strip():
+                st.error("Vyplňte povinná pole: Požadovaný příchod, odchod a důvod.")
+            else:
+                request_correction(
+                    user["id"], corr_date.isoformat(),
+                    orig_in, orig_out, orig_bs, orig_be,
+                    req_in, req_out, req_bs, req_be, reason
+                )
+                st.success("Žádost odeslána – administrátor ji brzy vyřídí ✓")
+                st.rerun()
+
+    with tab2:
+        corrections = get_user_corrections(user["id"])
+        if not corrections:
+            st.info("Žádné žádosti o úpravu.")
+        for c in corrections:
+            orig_str = f"{c['orig_in'] or '?'} – {c['orig_out'] or '?'}"
+            req_str  = f"{c['req_in']} – {c['req_out']}"
+            admin_note_str = f"<br><small style='color:#7a93ab'>Poznámka admina: {c['admin_note']}</small>" if c.get("admin_note") else ""
+            st.markdown(f"""<div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                    <div>
+                        <strong style="color:#1a2e4a">{c['date']}</strong>
+                        <span style="color:#3a5068"> · původně {orig_str} → požadováno {req_str}</span><br>
+                        <small style="color:#7a93ab">{c['reason']}</small>{admin_note_str}
+                    </div>
+                    {correction_status_badge(c['status'])}
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# PAGE: REPORTS
 # ─────────────────────────────────────────────
 def page_reports():
-    user = st.session_state.user
+    user     = st.session_state.user
     is_admin = user["role"] == "admin"
     st.markdown("""<div class="page-header">
         <h1>📈 Výkazy docházky</h1>
         <p>Měsíční přehled odpracovaných hodin</p>
     </div>""", unsafe_allow_html=True)
 
-    today = date.today()
-    col1, col2, col3 = st.columns(3)
-    with col1:
+    today = cet_today()
+    c1, c2, c3 = st.columns(3)
+    with c1:
         month = st.selectbox("Měsíc", list(range(1, 13)), index=today.month - 1,
-                             format_func=lambda m: ["Leden","Únor","Březen","Duben","Květen","Červen",
-                                                     "Červenec","Srpen","Září","Říjen","Listopad","Prosinec"][m-1])
-    with col2:
+                             format_func=lambda m: MONTH_NAMES[m-1])
+    with c2:
         year = st.selectbox("Rok", list(range(today.year - 1, today.year + 1)), index=1)
-    with col3:
+    with c3:
         if is_admin:
             users = get_all_users()
-            user_options = {u["id"]: u["display_name"] for u in users}
-            user_options[0] = "— Všichni zaměstnanci —"
-            selected_uid = st.selectbox("Zaměstnanec", options=[0] + [u["id"] for u in users],
-                                        format_func=lambda x: user_options[x])
+            uid_opts = {u["id"]: u["display_name"] for u in users}
+            uid_opts[0] = "— Všichni zaměstnanci —"
+            sel_uid = st.selectbox("Zaměstnanec", options=[0] + [u["id"] for u in users],
+                                   format_func=lambda x: uid_opts[x])
         else:
-            selected_uid = user["id"]
+            sel_uid = user["id"]
             st.text_input("Zaměstnanec", value=user["display_name"], disabled=True)
 
-    if is_admin and selected_uid == 0:
+    if is_admin and sel_uid == 0:
         target_users = get_all_users()
     else:
-        target_users = [next(u for u in get_all_users() if u["id"] == (selected_uid or user["id"]))]
+        target_users = [next(u for u in get_all_users() if u["id"] == (sel_uid or user["id"]))]
 
     all_rows = []
     for tu in target_users:
-        stats = get_month_stats(tu["id"], year, month)
+        stats    = get_month_stats(tu["id"], year, month)
         workdays = count_workdays_so_far(year, month)
-        wd_sec = sum(s["worked_seconds"] for s in stats if not s["is_weekend"])
-        we_sec = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
-        total_sec = wd_sec + we_sec
+        wd_sec   = sum(s["worked_seconds"] for s in stats if not s["is_weekend"])
+        we_sec   = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
         expected = workdays * 8 * 3600
-        diff = wd_sec - expected
         all_rows.append({
             "Jméno": tu["display_name"],
             "Pracovní dny": workdays,
             "Fond (h)": round(expected / 3600, 2),
             "Odpracováno (h)": round(wd_sec / 3600, 2),
             "Víkend (h)": round(we_sec / 3600, 2),
-            "Celkem (h)": round(total_sec / 3600, 2),
-            "Saldo (h)": round(diff / 3600, 2),
+            "Celkem (h)": round((wd_sec + we_sec) / 3600, 2),
+            "Saldo (h)": round((wd_sec - expected) / 3600, 2),
         })
 
     if all_rows:
         df = pd.DataFrame(all_rows)
         st.dataframe(df, use_container_width=True, hide_index=True)
-
-        # ── CSV export
         csv = df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
-
-        # ── XLSX export (summary sheet + per-user daily sheets)
-        xlsx_buf = io.BytesIO()
-        with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             df.to_excel(writer, sheet_name="Přehled", index=False)
             for tu in target_users:
                 stats = get_month_stats(tu["id"], year, month)
                 if stats:
-                    df_day = pd.DataFrame(stats)
-                    df_day["Odpracováno"] = df_day["worked_seconds"].apply(seconds_to_hm)
-                    df_day["Typ dne"] = df_day["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
-                    df_day = df_day[["date","checkin","checkout","Odpracováno","Typ dne"]].rename(columns={
-                        "date": "Datum", "checkin": "Příchod", "checkout": "Odchod"
-                    })
-                    sheet_name = tu["display_name"][:31]  # Excel sheet name max 31 chars
-                    df_day.to_excel(writer, sheet_name=sheet_name, index=False)
-        xlsx_buf.seek(0)
+                    df2 = pd.DataFrame(stats)
+                    df2["Odpracováno"] = df2["worked_seconds"].apply(seconds_to_hm)
+                    df2["Typ"] = df2["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
+                    df2 = df2[["date","checkin","checkout","Odpracováno","Typ"]].rename(
+                        columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
+                    df2.to_excel(writer, sheet_name=tu["display_name"][:31], index=False)
+        buf.seek(0)
+        dl1, dl2, _ = st.columns([1, 1, 4])
+        with dl1:
+            st.download_button("⬇ CSV", data=csv,
+                               file_name=f"dochazka_{year}_{month:02d}.csv", mime="text/csv")
+        with dl2:
+            st.download_button("⬇ XLSX", data=buf,
+                               file_name=f"dochazka_{year}_{month:02d}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        dl_col1, dl_col2, _ = st.columns([1, 1, 4])
-        with dl_col1:
-            st.download_button(
-                "⬇ Stáhnout CSV",
-                data=csv,
-                file_name=f"dochazka_{year}_{month:02d}.csv",
-                mime="text/csv",
-            )
-        with dl_col2:
-            st.download_button(
-                "⬇ Stáhnout XLSX",
-                data=xlsx_buf,
-                file_name=f"dochazka_{year}_{month:02d}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-        if len(target_users) == 1 and (is_admin or selected_uid == user["id"]):
+        if len(target_users) == 1:
             st.markdown("---")
             st.markdown("#### Denní přehled")
             stats = get_month_stats(target_users[0]["id"], year, month)
             if stats:
-                df2 = pd.DataFrame(stats)
-                df2["worked"] = df2["worked_seconds"].apply(seconds_to_hm)
-                df2["typ"] = df2["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
-                df2 = df2[["date", "checkin", "checkout", "worked", "typ"]].rename(columns={
-                    "date": "Datum", "checkin": "Příchod", "checkout": "Odchod",
-                    "worked": "Odpracováno", "typ": "Typ dne"
-                })
-                st.dataframe(df2, use_container_width=True, hide_index=True)
+                df3 = pd.DataFrame(stats)
+                df3["Odpracováno"] = df3["worked_seconds"].apply(seconds_to_hm)
+                df3["Typ"] = df3["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
+                df3 = df3[["date","checkin","checkout","Odpracováno","Typ"]].rename(
+                    columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
+                st.dataframe(df3, use_container_width=True, hide_index=True)
+
 
 # ─────────────────────────────────────────────
-# PAGE: ADMIN – MANAGE
+# PAGE: ADMIN
 # ─────────────────────────────────────────────
 def page_admin():
     st.markdown("""<div class="page-header">
-        <h1>⚙️ Správa uživatelů</h1>
-        <p>Uživatelé, nemoci, schvalování absencí</p>
+        <h1>⚙️ Správa</h1>
+        <p>Uživatelé, schválení absencí a úprav docházky</p>
     </div>""", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["👥 Uživatelé", "➕ Nový uživatel", "🤒 Vložit nemoc", "✅ Schválení absencí"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "👥 Uživatelé", "➕ Nový uživatel",
+        "🤒 Vložit nemoc", "✅ Schválení absencí", "✏️ Schválení úprav"
+    ])
 
+    # ── Tab 1: Users ──────────────────────────────────────
     with tab1:
         users = get_all_users()
         for u in users:
             with st.expander(f"{u['display_name']} (@{u['username']}) · {u['role']}"):
-                col1, col2 = st.columns(2)
-                with col1:
+                # Rename
+                st.markdown("**Přejmenování**")
+                col_rn1, col_rn2 = st.columns([3, 1])
+                with col_rn1:
+                    new_name = st.text_input("Nové zobrazované jméno", value=u["display_name"],
+                                             key=f"rename_{u['id']}")
+                with col_rn2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("Přejmenovat", key=f"do_rename_{u['id']}"):
+                        if new_name.strip() and new_name.strip() != u["display_name"]:
+                            update_user_name(u["id"], new_name)
+                            # Update session user if renaming self
+                            if u["id"] == st.session_state.user["id"]:
+                                st.session_state.user["display_name"] = new_name.strip()
+                            st.success(f"Jméno změněno na: {new_name.strip()}")
+                            st.rerun()
+                        else:
+                            st.info("Zadejte jiné jméno.")
+
+                st.markdown("---")
+                # Password
+                st.markdown("**Změna hesla**")
+                col_pw1, col_pw2 = st.columns([3, 1])
+                with col_pw1:
                     new_pw = st.text_input("Nové heslo", key=f"pw_{u['id']}", type="password")
+                with col_pw2:
+                    st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("Změnit heslo", key=f"chpw_{u['id']}"):
                         if new_pw:
                             update_user_password(u["id"], new_pw)
                             st.success("Heslo změněno.")
                         else:
                             st.warning("Zadejte nové heslo.")
-                with col2:
-                    if u["id"] != st.session_state.user["id"]:
-                        if st.button("⛔ Deaktivovat účet", key=f"del_{u['id']}"):
-                            deactivate_user(u["id"])
-                            st.warning(f"Účet {u['username']} byl deaktivován.")
-                            st.rerun()
 
+                # Deactivate
+                if u["id"] != st.session_state.user["id"]:
+                    st.markdown("---")
+                    if st.button("⛔ Deaktivovat účet", key=f"del_{u['id']}"):
+                        deactivate_user(u["id"])
+                        st.warning(f"Účet @{u['username']} byl deaktivován.")
+                        st.rerun()
+
+    # ── Tab 2: New user ───────────────────────────────────
     with tab2:
         with st.form("new_user_form"):
             c1, c2 = st.columns(2)
             with c1:
                 new_username = st.text_input("Uživatelské jméno")
-                new_display = st.text_input("Celé jméno")
-                new_color = st.color_picker("Barva avataru", value="#3b82f6")
+                new_display  = st.text_input("Celé jméno")
+                new_color    = st.color_picker("Barva avataru", value="#1f5e8c")
             with c2:
                 new_password = st.text_input("Heslo", type="password")
-                new_role = st.selectbox("Role", ["user", "admin"])
+                new_role     = st.selectbox("Role", ["user", "admin"])
+                new_email    = st.text_input("E-mail (pro notifikace)")
             submitted = st.form_submit_button("Vytvořit uživatele", type="primary")
         if submitted:
             if new_username and new_password and new_display:
                 ok, msg = create_user(new_username, new_password, new_display, new_role, new_color)
+                # Store email too if provided
+                if ok and new_email:
+                    with get_conn() as conn:
+                        conn.execute("UPDATE users SET email=? WHERE username=?", (new_email, new_username))
+                        conn.commit()
                 st.success(msg) if ok else st.error(msg)
             else:
                 st.warning("Vyplňte všechna povinná pole.")
 
+    # ── Tab 3: Admin insert sick ──────────────────────────
     with tab3:
-        st.markdown("Administrátor může přímo zaznamenat nemoc zaměstnance na libovolný den či rozsah dní. Absence bude automaticky schválena.")
-        st.markdown("")
+        st.markdown("Administrátor může přímo zaznamenat nemoc. Absence bude automaticky schválena.")
         users = get_all_users()
-        user_options = {u["id"]: u["display_name"] for u in users}
-
+        uid_map = {u["id"]: u["display_name"] for u in users}
         with st.form("admin_sick_form"):
-            sick_uid = st.selectbox("Zaměstnanec", options=[u["id"] for u in users],
-                                    format_func=lambda x: user_options[x])
+            sick_uid = st.selectbox("Zaměstnanec", [u["id"] for u in users],
+                                    format_func=lambda x: uid_map[x])
             c1, c2 = st.columns(2)
             with c1:
-                sick_from = st.date_input("Od (první den nemoci)", value=date.today())
+                sick_from = st.date_input("Od", value=cet_today())
             with c2:
-                sick_to = st.date_input("Do (poslední den nemoci)", value=date.today())
-            sick_note = st.text_input("Poznámka (nepovinné)", placeholder="např. neschopenka, karanténa…")
+                sick_to   = st.date_input("Do", value=cet_today())
+            sick_note = st.text_input("Poznámka", placeholder="neschopenka, karanténa…")
             submitted_sick = st.form_submit_button("🤒 Zaznamenat nemoc", type="primary")
-
         if submitted_sick:
             if sick_to < sick_from:
-                st.error("Datum 'Do' musí být stejné nebo pozdější než 'Od'.")
+                st.error("Datum 'Do' musí být ≥ 'Od'.")
             else:
-                # Insert as approved (approved=1) directly
                 with get_conn() as conn:
                     conn.execute(
-                        "INSERT INTO absences(user_id, absence_type, date_from, date_to, note, approved) VALUES(?,?,?,?,?,1)",
+                        "INSERT INTO absences(user_id,absence_type,date_from,date_to,note,approved,email_sent) VALUES(?,?,?,?,?,1,0)",
                         (sick_uid, "sickday", sick_from.isoformat(), sick_to.isoformat(), sick_note)
                     )
                     conn.commit()
-                emp_name = user_options[sick_uid]
                 days = (sick_to - sick_from).days + 1
-                st.success(f"Nemoc pro **{emp_name}** zaznamenána ({sick_from} – {sick_to}, {days} {'den' if days == 1 else 'dny' if days < 5 else 'dní'}) ✓")
+                st.success(f"Nemoc pro **{uid_map[sick_uid]}** zaznamenána ({days} {'den' if days==1 else 'dní'}) ✓")
                 st.rerun()
 
-        # Show recent admin-inserted sick days
         st.markdown("---")
-        st.markdown("**Nedávno vložené nemoci**")
+        st.markdown("**Nedávné záznamy nemoci**")
         with get_conn() as conn:
             recent = [dict(r) for r in conn.execute(
                 """SELECT a.*, u.display_name FROM absences a
@@ -1234,83 +1276,151 @@ def page_admin():
         for r in recent:
             note_str = f" · {r['note']}" if r.get("note") else ""
             days = (date.fromisoformat(r["date_to"]) - date.fromisoformat(r["date_from"])).days + 1
-            day_label = f"{r['date_from']}" if days == 1 else f"{r['date_from']} – {r['date_to']}"
-            st.markdown(f"""<div class="card card-red" style="padding:14px 18px;margin-bottom:8px">
+            day_label = r["date_from"] if days == 1 else f"{r['date_from']} – {r['date_to']}"
+            st.markdown(f"""<div class="card card-red" style="padding:12px 18px;margin-bottom:6px">
                 <strong style="color:#1a2e4a">{r['display_name']}</strong>
-                <span style="color:#c0392b"> · 🤒 Nemoc</span>
-                <span style="color:#3a5068"> · {day_label}{note_str}</span>
+                <span style="color:#c0392b"> · 🤒</span>
+                <span style="color:#3a5068"> {day_label}{note_str}</span>
             </div>""", unsafe_allow_html=True)
             if st.button("🗑 Smazat", key=f"del_sick_{r['id']}"):
                 delete_absence(r["id"])
                 st.rerun()
 
+    # ── Tab 4: Approve absences ───────────────────────────
     with tab4:
         with get_conn() as conn:
-            pending = [dict(r) for r in conn.execute(
-                """SELECT a.*, u.display_name FROM absences a
+            pending_abs = [dict(r) for r in conn.execute(
+                """SELECT a.*, u.display_name, u.email FROM absences a
                    JOIN users u ON a.user_id=u.id
                    WHERE a.approved=0 ORDER BY a.date_from"""
             ).fetchall()]
 
-        if not pending:
-            st.info("Žádné čekající žádosti.")
-        for a in pending:
-            type_label = "🤒 Sickday" if a["absence_type"] == "sickday" else "🏖 Dovolená"
-            date_str = a['date_from'] if a['date_from'] == a['date_to'] else f"{a['date_from']} – {a['date_to']}"
+        if not pending_abs:
+            st.info("✅ Žádné čekající žádosti o absenci.")
+
+        type_labels = {"sickday": "🤒 Sickday", "vacation": "🏖 Dovolená"}
+        for a in pending_abs:
+            type_label = type_labels.get(a["absence_type"], a["absence_type"])
+            date_str   = a["date_from"] if a["date_from"] == a["date_to"] else f"{a['date_from']} – {a['date_to']}"
+            email_info = a.get("email") or ""
             st.markdown(f"""<div class="card card-yellow">
                 <strong style="color:#1a2e4a">{a['display_name']}</strong>
                 <span style="color:#3a5068"> · {type_label} · {date_str}</span>
-                <span style="color:#7a93ab">{(' · ' + a['note']) if a.get('note') else ''}</span>
+                <span style="color:#7a93ab">{' · ' + a['note'] if a.get('note') else ''}</span><br>
+                <small style="color:#7a93ab">✉ Po schválení bude odeslán email na: <strong>{email_info or 'email nenastavena'}</strong></small>
             </div>""", unsafe_allow_html=True)
             col1, col2, _ = st.columns([1, 1, 4])
             with col1:
-                if st.button("✅ Schválit", key=f"app_{a['id']}"):
-                    approve_absence(a["id"], True)
+                if st.button("✅ Schválit", key=f"app_abs_{a['id']}"):
+                    sent = approve_absence(a["id"], True,
+                                           user_email=email_info,
+                                           user_name=a["display_name"])
+                    if sent:
+                        st.success(f"Schváleno ✓ · Email odeslán na {email_info}" if email_info
+                                   else "Schváleno ✓ (simulace emailu – email uživatele není nastaven)")
+                    else:
+                        st.success("Schváleno ✓")
                     st.rerun()
             with col2:
-                if st.button("❌ Zamítnout", key=f"rej_{a['id']}"):
+                if st.button("❌ Zamítnout", key=f"rej_abs_{a['id']}"):
                     approve_absence(a["id"], False)
                     st.rerun()
+
+        # Show email simulation log
+        if st.session_state.get("email_log"):
+            st.markdown("---")
+            st.markdown("**📬 Simulace odeslaných e-mailů** *(EMAIL_ENABLED = False)*")
+            for em in st.session_state["email_log"]:
+                with st.expander(f"✉ {em['to']} – {em['subject']}"):
+                    st.code(em["body"])
+
+    # ── Tab 5: Approve corrections ────────────────────────
+    with tab5:
+        pending_corr = get_pending_corrections()
+        if not pending_corr:
+            st.info("✅ Žádné čekající žádosti o úpravu záznamu.")
+
+        for c in pending_corr:
+            orig_str = f"{c['orig_in'] or '?'} – {c['orig_out'] or '?'}"
+            req_str  = f"{c['req_in']} – {c['req_out']}"
+            brk_str  = f" · pauza {c['req_break_start']}–{c['req_break_end']}" if c.get("req_break_start") else ""
+            st.markdown(f"""<div class="card card-yellow">
+                <strong style="color:#1a2e4a">{c['display_name']}</strong>
+                <span style="color:#3a5068"> · {c['date']} · původně {orig_str} → požadováno {req_str}{brk_str}</span><br>
+                <small style="color:#7a93ab">{c['reason']}</small>
+            </div>""", unsafe_allow_html=True)
+
+            admin_note_key = f"corr_note_{c['id']}"
+            admin_note = st.text_input("Poznámka pro zaměstnance (volitelné)", key=admin_note_key)
+            col1, col2, _ = st.columns([1, 1, 4])
+            with col1:
+                if st.button("✅ Schválit", key=f"app_corr_{c['id']}"):
+                    resolve_correction(c["id"], True, admin_note)
+                    st.success("Úprava schválena ✓")
+                    st.rerun()
+            with col2:
+                if st.button("❌ Zamítnout", key=f"rej_corr_{c['id']}"):
+                    resolve_correction(c["id"], False, admin_note)
+                    st.rerun()
+            st.markdown("---")
+
 
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 init_db()
 
+# Add email column to users if not exists (migration)
+with get_conn() as _conn:
+    try:
+        _conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        _conn.commit()
+    except Exception:
+        pass
+
 if "user" not in st.session_state:
     page_login()
 else:
-    user = st.session_state.user
+    user     = st.session_state.user
     is_admin = user["role"] == "admin"
 
     with st.sidebar:
+        # Logo – bílé logo na tmavém pruhu, modré logo na bílém pozadí
+        logo_p = logo_st_path(white=False)
+        if logo_p:
+            st.image(str(logo_p), use_container_width=True)
+        else:
+            st.markdown(logo_img_tag(white=False, height=48), unsafe_allow_html=True)
+
         st.markdown(f"""
-        <div class="sidebar-brand">
-            <div class="brand-icon">🏛️</div>
-            <div class="brand-title">Docházkový systém</div>
-            <div class="brand-sub">Exekutorský úřad Praha 4</div>
+        <div style="text-align:center;margin-bottom:4px">
+            <div style="font-size:.72rem;color:#7a93ab;letter-spacing:.04em">
+                Docházkový systém
+            </div>
         </div>
-        <div style="display:flex;align-items:center;gap:10px;padding:6px 4px 4px">
-            {avatar_html(user['display_name'], user['color'])}
+        <div class="sidebar-divider"></div>
+        <div style="display:flex;align-items:center;gap:10px;padding:4px 4px 8px">
+            {avatar_html(user['display_name'], user.get('color','#1f5e8c'))}
             <div>
-                <div style="font-weight:700;font-size:0.9rem;color:#1a2e4a">{user['display_name']}</div>
-                <div style="font-size:0.73rem;color:#7a93ab">{'Administrátor' if is_admin else 'Zaměstnanec'}</div>
+                <div style="font-weight:700;font-size:.9rem;color:#1a2e4a">{user['display_name']}</div>
+                <div style="font-size:.73rem;color:#7a93ab">{'Administrátor' if is_admin else 'Zaměstnanec'}</div>
             </div>
         </div>
         <div class="sidebar-divider"></div>
         """, unsafe_allow_html=True)
 
+        if "page" not in st.session_state:
+            st.session_state.page = "dashboard"
+
         pages = {
-            "📊 Přehled dne": "dashboard",
-            "🕐 Moje docházka": "attendance",
-            "🏖 Absence": "absences",
-            "📈 Výkazy": "reports",
+            "📊 Přehled dne":     "dashboard",
+            "🕐 Moje docházka":   "attendance",
+            "🏖 Absence":         "absences",
+            "✏️ Úpravy záznamu":  "corrections",
+            "📈 Výkazy":          "reports",
         }
         if is_admin:
             pages["⚙️ Správa"] = "admin"
-
-        if "page" not in st.session_state:
-            st.session_state.page = "dashboard"
 
         for label, key in pages.items():
             if st.button(label, use_container_width=True,
@@ -1318,7 +1428,8 @@ else:
                 st.session_state.page = key
                 st.rerun()
 
-        st.markdown("---")
+        st.markdown("<div class='sidebar-divider'></div>", unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:.7rem;color:#b0bec5;text-align:center;margin-bottom:6px">CET: {cet_now().strftime("%d.%m.%Y %H:%M")}</div>', unsafe_allow_html=True)
         if st.button("🚪 Odhlásit se", use_container_width=True):
             del st.session_state.user
             st.session_state.page = "dashboard"
@@ -1331,6 +1442,8 @@ else:
         page_my_attendance()
     elif page == "absences":
         page_absences()
+    elif page == "corrections":
+        page_corrections()
     elif page == "reports":
         page_reports()
     elif page == "admin" and is_admin:
