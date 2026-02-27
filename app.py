@@ -25,6 +25,7 @@ BACKUP_DIR = Path(__file__).parent / "backups"
 BACKUP_DIR.mkdir(exist_ok=True)
 BACKUP_KEEP = 30      # max počet uchovávaných automatických záloh
 BACKUP_INTERVAL_H = 6 # každých N hodin
+_BACKUP_STARTED    = False  # module-level – zabrání duplicitním threadům
 CET       = ZoneInfo("Europe/Prague")
 BASE_DIR  = Path(__file__).parent
 
@@ -515,11 +516,12 @@ def _auto_backup_loop():
 
 
 def start_auto_backup():
-    """Spustí background thread pro automatické zálohy (jednou za session)."""
-    if not st.session_state.get("_backup_thread_started"):
+    """Spustí background thread pro automatické zálohy – pouze jednou za proces."""
+    global _BACKUP_STARTED
+    if not _BACKUP_STARTED:
+        _BACKUP_STARTED = True
         t = threading.Thread(target=_auto_backup_loop, daemon=True)
         t.start()
-        st.session_state["_backup_thread_started"] = True
 
 
 def list_backups() -> list[dict]:
@@ -614,6 +616,7 @@ def init_db():
         for _migration in [
             "ALTER TABLE absences ADD COLUMN email_sent INTEGER DEFAULT 0",
             "ALTER TABLE absences ADD COLUMN half_days TEXT DEFAULT '[]'",
+            "ALTER TABLE pauses ADD COLUMN paid INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(_migration)
@@ -698,11 +701,24 @@ def ensure_attendance(user_id, day=None):
 
 def do_checkin(user_id):
     att = get_attendance(user_id)
-    if att and att["checkin_time"]:
-        return False, "Příchod byl již zaznamenán."
+    now = now_str()
+    if att and att["checkin_time"] and not att["checkout_time"]:
+        return False, "Příchod byl již zaznamenán (nejprve zaznamenejte odchod)."
+    if att and att["checkin_time"] and att["checkout_time"]:
+        # Druhý příchod v tentýž den – mezičas se stane pauzou
+        pause_start = att["checkout_time"]
+        with get_conn() as conn:
+            conn.execute("UPDATE attendance SET checkout_time=NULL WHERE id=?", (att["id"],))
+            conn.execute(
+                "INSERT INTO pauses(attendance_id,pause_type,start_time,end_time,paid)"
+                " VALUES(?,?,?,?,0)",
+                (att["id"], "přestávka (2. příchod)", pause_start, now)
+            )
+            conn.commit()
+        return True, f"Druhý příchod zaznamenán ✓ (přestávka {pause_start[11:16]}–{now[11:16]} přidána)"
     att_id = ensure_attendance(user_id)
     with get_conn() as conn:
-        conn.execute("UPDATE attendance SET checkin_time=? WHERE id=?", (now_str(), att_id))
+        conn.execute("UPDATE attendance SET checkin_time=? WHERE id=?", (now, att_id))
         conn.commit()
     return True, "Příchod zaznamenán ✓"
 
@@ -724,15 +740,16 @@ def get_pauses(att_id):
             "SELECT * FROM pauses WHERE attendance_id=? ORDER BY start_time", (att_id,)
         ).fetchall()]
 
-def open_pause(att_id, pause_type):
+def open_pause(att_id, pause_type, paid=False, start_override=None):
     pauses = get_pauses(att_id)
     for p in pauses:
         if p["end_time"] is None:
             return False, "Existuje nezavřená pauza."
+    start = start_override or now_str()
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO pauses(attendance_id,pause_type,start_time) VALUES(?,?,?)",
-            (att_id, pause_type, now_str())
+            "INSERT INTO pauses(attendance_id,pause_type,start_time,paid) VALUES(?,?,?,?)",
+            (att_id, pause_type, start, 1 if paid else 0)
         )
         conn.commit()
     return True, f"Pauza ({pause_type}) zahájena."
@@ -934,6 +951,18 @@ def get_user_corrections(user_id):
             "SELECT * FROM time_corrections WHERE user_id=? ORDER BY created_at DESC", (user_id,)
         ).fetchall()]
 
+def get_pending_counts() -> dict:
+    """Vrátí počty čekajících schválení pro notifikační odznak."""
+    with get_conn() as conn:
+        abs_cnt = conn.execute(
+            "SELECT COUNT(*) FROM absences WHERE approved=0"
+        ).fetchone()[0]
+        cor_cnt = conn.execute(
+            "SELECT COUNT(*) FROM time_corrections WHERE status='pending'"
+        ).fetchone()[0]
+    return {"absences": abs_cnt, "corrections": cor_cnt, "total": abs_cnt + cor_cnt}
+
+
 def get_pending_corrections():
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(
@@ -1002,11 +1031,14 @@ def seconds_to_hm(seconds: int) -> str:
     return f"{seconds // 3600}h {(seconds % 3600) // 60:02d}m"
 
 def calc_worked_seconds(att, pauses):
+    """Odpracované sekundy. Placené pauzy (lékař) se NEodečítají."""
     if not att or not att["checkin_time"]:
         return 0
     checkout = att["checkout_time"] or now_str()
     total = time_to_seconds(checkout) - time_to_seconds(att["checkin_time"])
     for p in pauses:
+        if p.get("paid"):          # placená pauza – nezmenšuje fond
+            continue
         end = p["end_time"] or now_str()
         total -= (time_to_seconds(end) - time_to_seconds(p["start_time"]))
     return max(0, total)
@@ -1168,6 +1200,20 @@ def get_status_overview():
         result.append({**u, "status": status, "detail": detail, "checkin": checkin})
     return result
 
+
+def get_missing_today() -> list:
+    """Vrátí uživatele, kteří dnes nemají ani příchod ani absenci."""
+    today = today_str()
+    absences = {a["user_id"] for a in get_absences_for_date(today)}
+    result = []
+    for u in get_all_users():
+        if u["id"] in absences:
+            continue
+        att = get_attendance(u["id"], today)
+        if not att or not att["checkin_time"]:
+            result.append(u)
+    return result
+
 # ─────────────────────────────────────────────
 # UI HELPERS
 # ─────────────────────────────────────────────
@@ -1184,7 +1230,8 @@ STATUS_LABEL = {
     "offline": ("Offline",   "offline"),
     "done":    ("Skončil/a", "offline"),
 }
-PAUSE_TYPES = ["🍽 Oběd", "🏥 Doktor", "☕ Přestávka", "📦 Jiné"]
+PAUSE_TYPES = ["🍽 Oběd", "☕ Přestávka", "📦 Jiné"]
+PAUSE_TYPES_PAID = {"🏥 Lékař (placená pauza)"}  # nezmenšuje odpracovaný čas
 MONTH_NAMES = ["Leden","Únor","Březen","Duben","Květen","Červen",
                "Červenec","Srpen","Září","Říjen","Listopad","Prosinec"]
 
@@ -1319,6 +1366,45 @@ def page_dashboard():
     </div>
     <div class="content-pad">""", unsafe_allow_html=True)
 
+    # ── Rychlé akce (příchod/odchod/pauza) ──────────────────
+    _dash_user = st.session_state.user
+    _dash_att  = get_attendance(_dash_user["id"])
+    _absences_today = get_absences_for_date()
+    _my_absence = next((a for a in _absences_today if a["user_id"] == _dash_user["id"]), None)
+    if not _my_absence:
+        st.markdown("#### ⚡ Rychlé akce")
+        _qa_cols = st.columns(4)
+        if not _dash_att or not _dash_att.get("checkin_time"):
+            with _qa_cols[0]:
+                if st.button("▶ Příchod", use_container_width=True, type="primary"):
+                    ok, msg = do_checkin(_dash_user["id"])
+                    st.success(msg) if ok else st.warning(msg); st.rerun()
+        elif _dash_att.get("checkin_time") and not _dash_att.get("checkout_time"):
+            _dash_pauses = get_pauses(_dash_att["id"])
+            _open_p = [p for p in _dash_pauses if p["end_time"] is None]
+            if not _open_p:
+                with _qa_cols[0]:
+                    if st.button("⏹ Odchod", use_container_width=True, type="primary"):
+                        ok, msg = do_checkout(_dash_user["id"])
+                        st.success(msg) if ok else st.warning(msg); st.rerun()
+                with _qa_cols[1]:
+                    _all_pt = PAUSE_TYPES + list(PAUSE_TYPES_PAID)
+                    _dp_type = st.selectbox("Typ", _all_pt, key="dash_pt", label_visibility="collapsed")
+                    if st.button("⏸ Pauza", use_container_width=True):
+                        ok, msg = open_pause(_dash_att["id"], _dp_type, paid=_dp_type in PAUSE_TYPES_PAID)
+                        st.success(msg) if ok else st.warning(msg); st.rerun()
+            else:
+                with _qa_cols[0]:
+                    if st.button("▶ Ukončit pauzu", use_container_width=True, type="primary"):
+                        ok, msg = end_pause(_dash_att["id"])
+                        st.success(msg) if ok else st.warning(msg); st.rerun()
+        elif _dash_att and _dash_att.get("checkout_time"):
+            with _qa_cols[0]:
+                if st.button("▶ 2. Příchod", use_container_width=True, type="primary"):
+                    ok, msg = do_checkin(_dash_user["id"])
+                    st.success(msg) if ok else st.warning(msg); st.rerun()
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
     overview = get_status_overview()
     working  = [u for u in overview if u["status"] == "working"]
     paused   = [u for u in overview if u["status"] == "pause"]
@@ -1326,6 +1412,7 @@ def page_dashboard():
     vacation = [u for u in overview if u["status"] == "vacation"]
     done     = [u for u in overview if u["status"] == "done"]
     offline  = [u for u in overview if u["status"] == "offline"]
+    missing  = get_missing_today() if st.session_state.user["role"] == "admin" else []
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -1370,6 +1457,22 @@ def page_dashboard():
         render_group("🔴 Sickday / Nemoc", sick)
         render_group("🔵 Dovolená", vacation)
         render_group("⚫ Skončili / Offline", done + offline)
+    if missing:
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="background:#fff7ed;border-left:4px solid #f59e0b;border-radius:8px;'
+            f'padding:10px 14px;margin-bottom:8px">'
+            f'<strong style="color:#92400e">⚠️ Chybí v systému dnes ({len(missing)} osob):</strong>'
+            f'</div>', unsafe_allow_html=True
+        )
+        for _mu in missing:
+            st.markdown(f"""
+            <div class="person-row">
+                {avatar_html(_mu['display_name'], _mu['color'])}
+                <div style="flex:1"><div class="name">{_mu['display_name']}</div>
+                <div class="detail">Bez příchodu ani absence</div></div>
+                <span class="badge badge-offline">❓ Chybí</span>
+            </div>""", unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1443,9 +1546,11 @@ def page_my_attendance():
         with col1:
             if not open_pauses:
                 st.markdown('<div class="btn-yellow">', unsafe_allow_html=True)
-                pause_type = st.selectbox("Typ pauzy", PAUSE_TYPES, label_visibility="collapsed")
+                all_pause_types = PAUSE_TYPES + list(PAUSE_TYPES_PAID)
+                pause_type = st.selectbox("Typ pauzy", all_pause_types, label_visibility="collapsed")
+                is_paid_pause = pause_type in PAUSE_TYPES_PAID
                 if st.button("⏸ Zahájit pauzu", use_container_width=True):
-                    ok, msg = open_pause(att["id"], pause_type)
+                    ok, msg = open_pause(att["id"], pause_type, paid=is_paid_pause)
                     st.success(msg) if ok else st.warning(msg)
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -1465,6 +1570,28 @@ def page_my_attendance():
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
+    # ── Byl jsem u lékaře ────────────────────────────────
+    if att and att["checkin_time"] and not att["checkout_time"]:
+        att_pauses = get_pauses(att["id"])
+        open_p_doc = [p for p in att_pauses if p["end_time"] is None]
+        if not open_p_doc:
+            with st.expander("🏥 Byl/a jsem dnes u lékaře"):
+                st.caption("Zaznamená placenou pauzu Lékař od 9:00 do aktuálního času. "
+                           "Tato pauza se NEPOČÍTÁ jako ztráta z pracovní doby.")
+                _doc_from = st.time_input("Odchod k lékaři od", value=time(9, 0), key="doc_from_time")
+                if st.button("✅ Zaznamenat návštěvu lékaře", key="doc_btn"):
+                    _doc_start = cet_today().isoformat() + " " + _doc_from.strftime("%H:%M:%S")
+                    _doc_end   = now_str()
+                    with get_conn() as _dc:
+                        _dc.execute(
+                            "INSERT INTO pauses(attendance_id,pause_type,start_time,end_time,paid)"
+                            " VALUES(?,?,?,?,1)",
+                            (att["id"], "🏥 Lékař (placená pauza)", _doc_start, _doc_end)
+                        )
+                        _dc.commit()
+                    st.success(f"Návštěva lékaře zaznamenána ({_doc_from.strftime("%H:%M")} – {_doc_end[11:16]}) ✓")
+                    st.rerun()
+
     if att:
         pauses = get_pauses(att["id"])
         if pauses:
@@ -1475,7 +1602,8 @@ def page_my_attendance():
                 if p["end_time"]:
                     secs = time_to_seconds(p["end_time"]) - time_to_seconds(p["start_time"])
                     dur = f" ({seconds_to_hm(secs)})"
-                st.markdown(f"- **{p['pause_type']}**: {p['start_time'][:5]} – {end}{dur}")
+                paid_tag = " 💚 placená" if p.get("paid") else ""
+                st.markdown(f"- **{p['pause_type']}**: {p['start_time'][:5]} – {end}{dur}{paid_tag}")
 
     # Monthly stats
     st.markdown("---")
@@ -1489,10 +1617,11 @@ def page_my_attendance():
         year = st.selectbox("Rok", list(range(today.year - 1, today.year + 1)), index=1)
 
     stats = get_month_stats(user["id"], year, month)
+    is_brigardnik = user.get("role") == "brigádník"
     workdays_so_far = count_workdays_so_far(year, month)
     absence_days    = count_absence_workdays(user["id"], year, month)
     eff_days        = effective_workdays(user["id"], year, month)
-    expected_sec    = eff_days * 8 * 3600
+    expected_sec    = 0 if is_brigardnik else eff_days * 8 * 3600
     wd_sec  = sum(s["worked_seconds"] for s in stats if not s["is_weekend"])
     we_sec  = sum(s["worked_seconds"] for s in stats if s["is_weekend"])
     diff    = wd_sec - expected_sec
@@ -1506,9 +1635,14 @@ def page_my_attendance():
             <div class="value" style="color:#1a3a5c">{seconds_to_hm(wd_sec + we_sec)}</div>
             <div class="sub">vč. {seconds_to_hm(we_sec)} víkend</div></div>""", unsafe_allow_html=True)
     with c2:
-        st.markdown(f"""<div class="card card-gray"><h3>Fond pracovní doby</h3>
-            <div class="value" style="color:#3a5068">{seconds_to_hm(expected_sec)}</div>
-            <div class="sub">{eff_days:.1f} dní (−{absence_days:.1f} absence)</div></div>""", unsafe_allow_html=True)
+        if is_brigardnik:
+            st.markdown(f"""<div class="card card-gray"><h3>Brigádník – bez fondu</h3>
+                <div class="value" style="color:#3a5068">{seconds_to_hm(wd_sec)}</div>
+                <div class="sub">Celkem odpracováno tento měsíc</div></div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(f"""<div class="card card-gray"><h3>Fond pracovní doby</h3>
+                <div class="value" style="color:#3a5068">{seconds_to_hm(expected_sec)}</div>
+                <div class="sub">{eff_days:.1f} dní (−{absence_days:.1f} absence)</div></div>""", unsafe_allow_html=True)
     with c3:
         color    = "green" if diff >= 0 else "red"
         val_col  = "#145c38" if diff >= 0 else "#9b2116"
@@ -1671,7 +1805,11 @@ def page_absences():
             else:
                 request_absence(user["id"], abs_type, date_from, date_to, note,
                                 half_days=half_days_sel if abs_type == "vacation" else [])
-                st.success("Žádost odeslána ✓")
+                type_names = {"vacation":"Dovolená","sickday":"Sickday","nemoc":"Nemoc/PN"}
+                st.success(f"✅ Žádost o {type_names.get(abs_type, abs_type)} odeslána "
+                           f"({date_from.strftime('%d.%m.')}"
+                           f"{(" – " + date_to.strftime('%d.%m.%Y')) if date_to != date_from else ('.%Y' + date_from.strftime('%Y'))}) "
+                           f"– čeká na schválení administrátorem.")
                 st.rerun()
 
     # ── Tab 2: Konec nemoci ─────────────────────────────────────
@@ -1810,7 +1948,6 @@ def page_corrections():
 def page_reports():
     user     = st.session_state.user
     is_admin = user["role"] == "admin"
-    start_auto_backup()  # spustí daemon thread (jednou za session)
     st.markdown("""<div class="page-header">
         <h1>📈 Výkazy docházky</h1>
         <p>Měsíční přehled odpracovaných hodin</p>
@@ -1909,6 +2046,33 @@ def page_reports():
                 df3 = df3[["date","checkin","checkout","Odpracováno","Typ"]].rename(
                     columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
                 st.dataframe(df3, use_container_width=True, hide_index=True)
+                # Pauzy
+                _rep_user = target_users[0]
+                _all_pauses_rows = []
+                with get_conn() as _pc:
+                    _month_pauses = _pc.execute(
+                        """SELECT p.*, a.date FROM pauses p
+                           JOIN attendance a ON p.attendance_id=a.id
+                           WHERE a.user_id=? AND strftime('%Y',a.date)=?
+                           AND strftime('%m',a.date)=? ORDER BY a.date,p.start_time""",
+                        (_rep_user["id"], str(year), f"{month:02d}")
+                    ).fetchall()
+                for _p in _month_pauses:
+                    _pd = dict(_p)
+                    _dur = ""
+                    if _pd.get("end_time"):
+                        _ds = time_to_seconds(_pd["end_time"]) - time_to_seconds(_pd["start_time"])
+                        _dur = seconds_to_hm(_ds)
+                    _all_pauses_rows.append({
+                        "Datum": _pd["date"], "Typ": _pd["pause_type"],
+                        "Začátek": _pd["start_time"][11:16] if _pd["start_time"] else "",
+                        "Konec": _pd["end_time"][11:16] if _pd.get("end_time") else "—",
+                        "Trvání": _dur,
+                        "Placená": "💚 Ano" if _pd.get("paid") else "Ne",
+                    })
+                if _all_pauses_rows:
+                    st.markdown("#### Pauzy v měsíci")
+                    st.dataframe(pd.DataFrame(_all_pauses_rows), use_container_width=True, hide_index=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1986,7 +2150,7 @@ def page_admin():
                 new_color    = st.color_picker("Barva avataru", value="#1f5e8c")
             with c2:
                 new_password = st.text_input("Heslo", type="password")
-                new_role     = st.selectbox("Role", ["user", "admin"])
+                new_role     = st.selectbox("Role", ["user", "admin", "brigádník"])
                 new_email    = st.text_input("E-mail (pro notifikace)")
             submitted = st.form_submit_button("Vytvořit uživatele", type="primary")
         if submitted:
@@ -2201,7 +2365,7 @@ def page_admin():
                 else:
                     st.error("Záloha se nezdařila.")
         with _bcol2:
-            _bkp_running = st.session_state.get("_backup_thread_started", False)
+            _bkp_running = _BACKUP_STARTED
             st.markdown(
                 f"<div style='padding:8px 12px;border-radius:8px;font-size:13px;"
                 f"background:{'#dcfce7' if _bkp_running else '#fee2e2'};"
@@ -2387,6 +2551,38 @@ def page_admin():
                         st.rerun()
             else:
                 st.caption("Žádné pauzy.")
+
+            # Editace existující pauzy
+            if _pauses:
+                with st.expander("✏️ Upravit existující pauzu"):
+                    _ep_sel = st.selectbox(
+                        "Vyberte pauzu",
+                        [p["id"] for p in _pauses],
+                        format_func=lambda pid: next(
+                            f"{p['pause_type']} {p['start_time'][11:16]}–{p.get('end_time','?')[11:16] if p.get('end_time') else '?'}" 
+                            for p in _pauses if p["id"] == pid
+                        ),
+                        key="edit_pause_sel"
+                    )
+                    _ep = next(p for p in _pauses if p["id"] == _ep_sel)
+                    _ep1, _ep2, _ep3 = st.columns(3)
+                    with _ep1:
+                        _ep_type = st.text_input("Typ", value=_ep["pause_type"], key="ep_type")
+                    with _ep2:
+                        _ep_s = st.text_input("Začátek (HH:MM)", value=_ep["start_time"][11:16], key="ep_start")
+                    with _ep3:
+                        _ep_e = st.text_input("Konec (HH:MM)", value=_ep["end_time"][11:16] if _ep.get("end_time") else "", key="ep_end")
+                    _ep_paid = st.checkbox("Placená pauza (lékař)", value=bool(_ep.get("paid")), key="ep_paid")
+                    if st.button("💾 Uložit pauzu", key="save_ep_btn"):
+                        _ep_sdt = _sel_day.isoformat() + " " + _ep_s.strip() + ":00" if _ep_s.strip() else None
+                        _ep_edt = _sel_day.isoformat() + " " + _ep_e.strip() + ":00" if _ep_e.strip() else None
+                        with get_conn() as _epc:
+                            _epc.execute(
+                                "UPDATE pauses SET pause_type=?,start_time=?,end_time=?,paid=? WHERE id=?",
+                                (_ep_type, _ep_sdt, _ep_edt, 1 if _ep_paid else 0, _ep_sel)
+                            )
+                            _epc.commit()
+                        st.success("Pauza uložena ✓"); st.rerun()
 
             # Přidat novou pauzu
             with st.expander("➕ Přidat pauzu"):
@@ -2767,6 +2963,7 @@ init_db()
 
 # Záloha při každém (re)startu aplikace
 _do_backup('startup')
+start_auto_backup()  # spustí daemon thread zálohy
 
 # Add email column to users if not exists (migration)
 with get_conn() as _conn:
@@ -2828,7 +3025,9 @@ else:
             "📈 Výkazy":          "reports",
         }
         if is_admin:
-            pages["⚙️ Správa"] = "admin"
+            _pend = get_pending_counts()
+            _badge = f" 🔴 {_pend['total']}" if _pend["total"] > 0 else ""
+            pages[f"⚙️ Správa{_badge}"] = "admin"
 
         for label, key in pages.items():
             if st.button(label, use_container_width=True,
