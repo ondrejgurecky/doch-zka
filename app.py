@@ -2024,10 +2024,10 @@ def page_calendar():
     num_days = last.day
     holidays = czech_holidays(year)
 
-    absences = get_all_absences_for_calendar(year, month)
-    users    = get_all_users()
+    absences  = get_all_absences_for_calendar(year, month)
+    users     = get_all_users()
 
-    # {user_id: {day_int: absence_type}}
+    # {user_id: {day: absence_type}}
     user_days = {}
     for a in absences:
         uid = a["user_id"]
@@ -2035,10 +2035,10 @@ def page_calendar():
             user_days[uid] = {}
         ab_from = max(date.fromisoformat(a["date_from"]), first)
         ab_to   = min(date.fromisoformat(a["date_to"]),   last)
-        d = ab_from
-        while d <= ab_to:
-            user_days[uid][d.day] = a["absence_type"]
-            d += timedelta(days=1)
+        cur = ab_from
+        while cur <= ab_to:
+            user_days[uid][cur.day] = a["absence_type"]
+            cur += timedelta(days=1)
 
     TYPE_STYLE = {
         "vacation":      ("#dbeafe", "#1d4ed8", "D"),
@@ -2048,202 +2048,189 @@ def page_calendar():
     }
     DOW_CZ = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"]
 
-    # ── Legenda ──
+    # ── Legenda ────────────────────────────────────────────────
     legend_items = [
-        ("#dbeafe", "#1d4ed8", "D", "Dovolená"),
-        ("#bfdbfe", "#1d4ed8", "½", "Dovolená půlden"),
-        ("#fee2e2", "#991b1b", "S", "Sickday"),
-        ("#ffe4e6", "#9f1239", "N", "Nemoc / PN"),
-        ("#f1f5f9", "#94a3b8", "⭑", "Státní svátek"),
+        ("#dbeafe", "#1d4ed8", "D",         "Dovolená"),
+        ("#bfdbfe", "#1d4ed8", "½",    "Dovolená půlden"),
+        ("#fee2e2", "#991b1b", "S",         "Sickday"),
+        ("#ffe4e6", "#9f1239", "N",         "Nemoc / PN"),
+        ("#fef9c3", "#92400e", "★",    "Státní svátek"),
     ]
-    leg_html = '<div style="display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap">'
+    leg_parts = ['<div style="display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap">']
     for bg, fg, letter, label in legend_items:
-        leg_html += (
+        leg_parts.append(
             '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#475569">'
-            '<div style="width:22px;height:22px;background:{bg};border:1px solid {fg}66;border-radius:4px;'
-            'display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:{fg}">{letter}</div>'
-            '{label}</div>'
-        ).format(bg=bg, fg=fg, letter=letter, label=label)
-    leg_html += '</div>'
-    st.markdown(leg_html, unsafe_allow_html=True)
+            '<div style="width:22px;height:22px;border-radius:4px;'
+            + f'background:{bg};border:1px solid {fg}88;'
+            + 'display:flex;align-items:center;justify-content:center;'
+            + f'font-size:11px;font-weight:800;color:{fg}">{letter}</div>'
+            + f'{label}</div>'
+        )
+    leg_parts.append('</div>')
+    st.markdown("".join(leg_parts), unsafe_allow_html=True)
 
-    # ── Tabulka ──
-    DAY_W   = 44   # širší buňka dne
-    NAME_W  = 96   # úzká jmenovka
-    CELL_H  = 38   # výška řádku
+    # ── Tabulka ─────────────────────────────────────────────────
+    # Rozměry
+    DAY_W  = 44   # px – šířka buňky dne
+    NAME_W = 100  # px – šířka sloupce se jménem
+    ROW_H  = 40   # px – výška řádku
 
-    parts = []
-    parts.append('<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:14px;'
-                 'box-shadow:0 2px 8px rgba(31,94,140,.09)">')
-    parts.append('<table style="border-collapse:collapse;font-family:Inter,sans-serif;'
-                 'width:100%;min-width:max-content;table-layout:fixed">')
+    rows = []
 
-    # ── Záhlaví ──
-    parts.append('<thead>')
-    parts.append('<tr style="background:#f0f4f8;border-bottom:2px solid #e2e8f0">')
-
-    # Jmenovka – záhlaví
-    parts.append(
-        '<th style="width:{nw}px;min-width:{nw}px;max-width:{nw}px;padding:8px 6px;'
-        'text-align:center;font-size:10px;color:#94a3b8;font-weight:700;'
-        'text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;'
-        'position:sticky;left:0;background:#f0f4f8;z-index:3;'
-        'border-right:2px solid #e2e8f0">—</th>'.format(nw=NAME_W)
+    # Záhlaví – jmenovka + dny
+    hdr_cells = []
+    hdr_cells.append(
+        f'<th style="min-width:{NAME_W}px;width:{NAME_W}px;max-width:{NAME_W}px;'
+        f'padding:8px 8px;text-align:left;font-size:10px;color:#94a3b8;font-weight:700;'
+        f'white-space:nowrap;background:#f0f4f8;border-right:2px solid #cbd5e1;'
+        f'border-bottom:2px solid #cbd5e1"></th>'
     )
-
-    for day in range(1, num_days + 1):
-        d        = date(year, month, day)
-        is_wknd  = d.weekday() >= 5
-        is_hol   = d in holidays
-        is_today = d == today
-        if is_today:
-            hdr_bg    = "#1d4ed8"
-            dow_color = "rgba(255,255,255,.75)"
-            num_color = "#ffffff"
-            border_b  = ""
-            num_fw    = "800"
+    for dn in range(1, num_days + 1):
+        d       = date(year, month, dn)
+        is_wknd = d.weekday() >= 5
+        is_hol  = d in holidays
+        is_tod  = d == today
+        if is_tod:
+            hbg = "#1d4ed8"; dnc = "rgba(255,255,255,.7)"; nnc = "#fff"; nfw = "800"
         elif is_hol:
-            hdr_bg = "#fef3c7"; dow_color = "#92400e"; num_color = "#92400e"; border_b = ""; num_fw = "700"
+            hbg = "#fef3c7"; dnc = "#92400e"; nnc = "#92400e"; nfw = "700"
         elif is_wknd:
-            hdr_bg = "#e8edf2"; dow_color = "#94a3b8"; num_color = "#94a3b8"; border_b = ""; num_fw = "600"
+            hbg = "#e2e8f0"; dnc = "#94a3b8"; nnc = "#94a3b8"; nfw = "600"
         else:
-            hdr_bg = "#f0f4f8"; dow_color = "#94a3b8"; num_color = "#1e293b"; border_b = ""; num_fw = "700"
-        parts.append(
-            '<th style="width:{w}px;min-width:{w}px;max-width:{w}px;text-align:center;'
-            'padding:6px 2px;background:{bg};{bb}">'
-            '<div style="font-size:9px;color:{dc};line-height:1;margin-bottom:2px;font-weight:600">{dow}</div>'
-            '<div style="font-size:15px;font-weight:{fw};color:{nc};line-height:1">{day}</div>'
-            '</th>'.format(
-                w=DAY_W, bg=hdr_bg, bb=border_b,
-                dow=DOW_CZ[d.weekday()], day=day,
-                nc=num_color, dc=dow_color, fw=num_fw
-            )
+            hbg = "#f0f4f8"; dnc = "#94a3b8"; nnc = "#1e293b"; nfw = "700"
+        hdr_cells.append(
+            f'<th style="min-width:{DAY_W}px;width:{DAY_W}px;max-width:{DAY_W}px;'
+            f'text-align:center;padding:5px 1px;background:{hbg};border-bottom:2px solid #cbd5e1;">'
+            f'<div style="font-size:9px;color:{dnc};font-weight:600;line-height:1.2">{DOW_CZ[d.weekday()]}</div>'
+            f'<div style="font-size:15px;font-weight:{nfw};color:{nnc};line-height:1.2">{dn}</div>'
+            f'</th>'
         )
-    parts.append('</tr></thead>')
+    rows.append('<tr>' + "".join(hdr_cells) + '</tr>')
 
-    # ── Tělo ──
-    parts.append('<tbody>')
+    # Řádky uživatelů
     for idx, u in enumerate(users):
-        uid    = u["id"]
-        days   = user_days.get(uid, {})
-        row_bg = "#ffffff" if idx % 2 == 0 else "#f8fafc"
-
-        parts.append('<tr style="background:{rb}">'.format(rb=row_bg))
-
-        # Jmenovka – jen avatar + příjmení zkrácené
+        uid       = u["id"]
+        udays     = user_days.get(uid, {})
+        rbg       = "#ffffff" if idx % 2 == 0 else "#f8fafc"
+        color     = u.get("color") or "#1f5e8c"
         initials  = "".join(w[0].upper() for w in u["display_name"].split()[:2])
-        short_name = u["display_name"].split()[-1]   # pouze příjmení
-        color      = u.get("color") or "#1f5e8c"
-        parts.append(
-            '<td style="width:{nw}px;min-width:{nw}px;max-width:{nw}px;height:{ch}px;'
-            'padding:4px 6px;white-space:nowrap;overflow:hidden;'
-            'position:sticky;left:0;background:{rb};z-index:1;'
-            'border-right:2px solid #e2e8f0;border-bottom:1px solid #f1f5f9">'
-            '<div style="display:flex;align-items:center;gap:5px;justify-content:flex-start">'
-            '<div style="width:22px;height:22px;border-radius:11px;flex-shrink:0;'
-            'background:{c}20;color:{c};border:1.5px solid {c}50;'
-            'display:flex;align-items:center;justify-content:center;'
-            'font-weight:800;font-size:8px;line-height:1">{ini}</div>'
-            '<span style="font-weight:600;font-size:11px;color:#334155;'
-            'overflow:hidden;text-overflow:ellipsis;max-width:{mw}px" title="{fullname}">{sname}</span>'
-            '</div></td>'.format(
-                nw=NAME_W, ch=CELL_H, rb=row_bg, c=color, ini=initials,
-                sname=short_name, fullname=u["display_name"], mw=NAME_W - 34
-            )
+        last_name = u["display_name"].split()[-1]
+        full_name = u["display_name"]
+
+        cells = []
+        # Jmenovka – avatar + příjmení
+        cells.append(
+            f'<td style="min-width:{NAME_W}px;width:{NAME_W}px;max-width:{NAME_W}px;'
+            f'height:{ROW_H}px;padding:4px 6px;background:{rbg};'
+            f'border-right:2px solid #cbd5e1;border-bottom:1px solid #e2e8f0;'
+            f'white-space:nowrap;overflow:hidden;">'
+            f'<div style="display:flex;align-items:center;gap:5px">'
+            f'<div style="flex-shrink:0;width:22px;height:22px;border-radius:50%;'
+            f'background:{color}22;color:{color};border:1.5px solid {color}66;'
+            f'display:flex;align-items:center;justify-content:center;'
+            f'font-weight:800;font-size:8px">{initials}</div>'
+            f'<span style="font-size:11px;font-weight:600;color:#334155;'
+            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{full_name}">'
+            f'{last_name}</span>'
+            f'</div></td>'
         )
 
-        for day in range(1, num_days + 1):
-            d        = date(year, month, day)
+        for dn in range(1, num_days + 1):
+            d        = date(year, month, dn)
             is_wknd  = d.weekday() >= 5
             is_hol   = d in holidays
-            is_today = d == today
-            abs_type = days.get(day)
+            is_tod   = d == today
+            atype    = udays.get(dn)
 
-            if abs_type:
-                bg2, fg2, letter = TYPE_STYLE.get(abs_type, ("#f1f5f9", "#64748b", "?"))
+            if atype:
+                abg, afg, aletter = TYPE_STYLE.get(atype, ("#f1f5f9", "#64748b", "?"))
                 inner = (
-                    '<div style="width:32px;height:32px;margin:0 auto;border-radius:6px;'
-                    'background:{bg};border:1.5px solid {fg}60;'
-                    'display:flex;align-items:center;justify-content:center;'
-                    'font-size:12px;font-weight:800;color:{fg}">{lt}</div>'
-                ).format(bg=bg2, fg=fg2, lt=letter)
+                    f'<div style="width:30px;height:30px;margin:0 auto;border-radius:6px;'
+                    f'background:{abg};border:1.5px solid {afg}66;'
+                    f'display:flex;align-items:center;justify-content:center;'
+                    f'font-size:12px;font-weight:800;color:{afg}">{aletter}</div>'
+                )
             elif is_hol:
-                inner = '<div style="text-align:center;font-size:16px;color:#f59e0b;line-height:2.2">⭑</div>'
+                inner = '<div style="text-align:center;font-size:15px;color:#f59e0b">★</div>'
             elif is_wknd:
-                inner = '<div style="width:20px;height:3px;margin:17px auto;background:#d1d5db;border-radius:2px"></div>'
+                inner = '<div style="width:18px;height:3px;margin:0 auto;background:#d1d5db;border-radius:2px"></div>'
             else:
                 inner = ''
 
-            if is_today:
-                cell_bg = "#eff6ff"
-                today_border = "border-left:2px solid #1d4ed8;border-right:2px solid #1d4ed8;"
+            if is_tod:
+                cbg = "#eff6ff"
+                brd = "border-left:2px solid #1d4ed8;border-right:2px solid #1d4ed8;"
             elif is_hol:
-                cell_bg = "#fffbeb"; today_border = ""
+                cbg = "#fefce8"; brd = ""
             elif is_wknd:
-                cell_bg = "#f1f5f9"; today_border = ""
+                cbg = "#f1f5f9"; brd = ""
             else:
-                cell_bg = row_bg; today_border = ""
+                cbg = rbg; brd = ""
 
-            parts.append(
-                '<td style="text-align:center;padding:3px 2px;height:{ch}px;'
-                '{tb}background:{cb};border-bottom:1px solid #f1f5f9">{inner}</td>'.format(
-                    ch=CELL_H, tb=today_border, cb=cell_bg, inner=inner
-                )
+            cells.append(
+                f'<td style="min-width:{DAY_W}px;width:{DAY_W}px;max-width:{DAY_W}px;'
+                f'height:{ROW_H}px;text-align:center;vertical-align:middle;padding:0 1px;'
+                f'background:{cbg};{brd}border-bottom:1px solid #e2e8f0;">{inner}</td>'
             )
-        parts.append('</tr>')
 
-    parts.append('</tbody></table></div>')
+        rows.append(f'<tr>{"".join(cells)}</tr>')
 
-    # Souhrn dní v měsíci
+    # Sestavení kompletní tabulky
+    table_html = (
+        '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;'
+        'border:1px solid #e2e8f0;border-radius:12px;'
+        'box-shadow:0 2px 8px rgba(31,94,140,.08)">'
+        '<table style="border-collapse:collapse;font-family:Inter,sans-serif;'
+        'min-width:max-content;width:100%">'
+        '<thead>' + rows[0] + '</thead>'
+        '<tbody>' + "".join(rows[1:]) + '</tbody>'
+        '</table></div>'
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
+
+    # ── Souhrn ──────────────────────────────────────────────────
     type_totals = {}
     for a in absences:
-        t  = a["absence_type"]
-        af = max(date.fromisoformat(a["date_from"]), first)
-        at = min(date.fromisoformat(a["date_to"]),   last)
+        t   = a["absence_type"]
+        af  = max(date.fromisoformat(a["date_from"]), first)
+        at  = min(date.fromisoformat(a["date_to"]),   last)
         type_totals[t] = type_totals.get(t, 0) + count_workdays_in_range(af, at)
 
-    sum_parts = ['<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:18px">']
-    labels_map = [
+    sum_parts = ['<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">']
+    for typ, tbg, tfg, tlabel in [
         ("vacation",      "#dbeafe", "#1d4ed8", "🏖 Dovolená"),
         ("vacation_half", "#bfdbfe", "#1d4ed8", "🌅 Půlden"),
         ("sickday",       "#fee2e2", "#991b1b", "🤒 Sickday"),
         ("nemoc",         "#ffe4e6", "#9f1239", "🏥 Nemoc/PN"),
-    ]
-    for typ, bg2, fg2, label in labels_map:
+    ]:
         cnt = type_totals.get(typ, 0)
         sum_parts.append(
-            '<div style="background:{bg};color:{fg};border-radius:8px;'
-            'padding:8px 16px;font-size:13px;font-weight:700">{label} · {cnt} dní</div>'.format(
-                bg=bg2, fg=fg2, label=label, cnt=cnt
-            )
+            f'<div style="background:{tbg};color:{tfg};border-radius:8px;'
+            f'padding:7px 14px;font-size:13px;font-weight:700">'
+            f'{tlabel} · {cnt} dní</div>'
         )
 
     # Státní svátky v měsíci
-    month_holidays = sorted(d for d in holidays if d.month == month and d.year == year)
-    if month_holidays:
-        hol_names = {
-            (1, 1): "Nový rok", (5, 1): "Svátek práce", (5, 8): "Den vítězství",
-            (7, 5): "Cyril a Metoděj", (7, 6): "Mistr Jan Hus", (9, 28): "Den české státnosti",
-            (10, 28): "Vznik ČSR", (11, 17): "Den boje za svobodu", (12, 24): "Štědrý den",
-            (12, 25): "1. svátek vánoční", (12, 26): "2. svátek vánoční",
-        }
-        for h in month_holidays:
-            name = hol_names.get((h.month, h.day), "Státní svátek")
-            sum_parts.append(
-                '<div style="background:#fef9c3;color:#92400e;border-radius:8px;'
-                'padding:8px 16px;font-size:13px;font-weight:700">⭑ {d}. – {n}</div>'.format(
-                    d=h.day, n=name
-                )
-            )
+    hol_names = {
+        (1,1):"Nový rok",(5,1):"Svátek práce",(5,8):"Den vítězství",
+        (7,5):"Cyril a Metoděj",(7,6):"Mistr Jan Hus",(9,28):"Den české státnosti",
+        (10,28):"Vznik ČSR",(11,17):"Den boje za svobodu",
+        (12,24):"Štědrý den",(12,25):"1. svátek vánoční",
+        (12,26):"2. svátek vánoční",
+    }
+    for h in sorted(d for d in holidays if d.month == month and d.year == year):
+        name = hol_names.get((h.month, h.day), "Státní svátek")
+        sum_parts.append(
+            f'<div style="background:#fef9c3;color:#92400e;border-radius:8px;'
+            f'padding:7px 14px;font-size:13px;font-weight:700">'
+            f'★ {h.day}. – {name}</div>'
+        )
     sum_parts.append('</div>')
-    st.markdown("".join(parts) + "".join(sum_parts), unsafe_allow_html=True)
+    st.markdown("".join(sum_parts), unsafe_allow_html=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-
-# ─────────────────────────────────────────────
-# CZECH CALENDAR INJECTION
-# ─────────────────────────────────────────────
 def inject_czech_datepicker():
     """
     Přejmenuje anglické názvy dnů a měsíců na české přes MutationObserver
