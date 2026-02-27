@@ -79,156 +79,310 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&family=Source+Serif+4:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
+/* ── Tokens – shodné s JSX ──────────────────── */
 :root {
-    --blue-dark:   #1a3a5c;
-    --blue-mid:    #1f5e8c;
-    --blue-bright: #158bc8;
-    --blue-light:  #e8f3fb;
-    --blue-xlight: #f0f7fd;
-    --white:       #ffffff;
-    --bg:          #f4f7fa;
-    --card-bg:     #ffffff;
-    --border:      #dce6ef;
-    --text-dark:   #1a2e4a;
-    --text-body:   #3a5068;
-    --text-muted:  #7a93ab;
-    --green:       #1e8c5a;
-    --green-bg:    #eaf7f1;
-    --orange:      #c97b10;
-    --orange-bg:   #fef6e8;
-    --red:         #c0392b;
-    --red-bg:      #fdf0ee;
-    --radius:      10px;
-    --shadow:      0 2px 8px rgba(26,58,92,.08);
-    --gradient:    linear-gradient(120deg, #0b5390 0%, #158bc8 81%);
+    --primary:   #1f5e8c;
+    --primary-d: #0b5390;
+    --bright:    #158bc8;
+    --gradient:  linear-gradient(120deg, #0b5390 0%, #158bc8 81%);
+    --white:     #ffffff;
+    --bg:        #f8fafc;          /* slate-50 */
+    --border:    #e2e8f0;          /* slate-200 */
+    --text-dark: #1e293b;
+    --text-body: #475569;
+    --text-muted:#64748b;
+    --radius-sm: 8px;
+    --radius:    14px;
+    --shadow:    0 1px 4px rgba(31,94,140,.07);
+    --shadow-md: 0 4px 12px rgba(31,94,140,.10);
+    /* semantic */
+    --green:     #065f46;
+    --green-bg:  #d1fae5;
+    --red:       #991b1b;
+    --red-bg:    #fee2e2;
+    --orange:    #92400e;
+    --orange-bg: #fef3c7;
+    --blue-bg:   #e0f2fe;
 }
 
+/* ── Base ───────────────────────────────────── */
 html, body, [class*="css"] {
-    font-family: 'Source Sans 3','Segoe UI',system-ui,sans-serif !important;
-    color: var(--text-body);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+    -webkit-font-smoothing: antialiased !important;
+    color: var(--text-body) !important;
 }
 .stApp { background: var(--bg) !important; }
 .main .block-container { padding-top: 1.5rem; max-width: 1320px; }
 
-/* ── Sidebar ── */
+/* ── Sidebar ────────────────────────────────── */
 [data-testid="stSidebar"] {
     background: var(--white) !important;
     border-right: 1px solid var(--border) !important;
 }
 [data-testid="stSidebar"] * { color: var(--text-body) !important; }
 [data-testid="stSidebar"] .stButton > button {
-    background: transparent !important; color: var(--text-body) !important;
-    border: none !important; border-radius: 8px !important;
-    text-align: left !important; font-size: .9rem !important;
-    font-weight: 500 !important; padding: 9px 14px !important; transition: all .15s !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    width: 100% !important;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    border: none !important;
+    border-radius: 9px !important;
+    text-align: left !important;
+    font-size: .875rem !important;
+    font-weight: 600 !important;
+    padding: 10px 14px !important;
+    margin-bottom: 2px !important;
+    transition: all .15s !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-    background: var(--blue-xlight) !important; color: var(--blue-mid) !important;
+    background: var(--bg) !important;
+    color: var(--text-dark) !important;
 }
+/* Active nav item */
 [data-testid="stSidebar"] .stButton > button[kind="primary"] {
-    background: var(--blue-mid) !important; color: var(--white) !important; font-weight: 600 !important;
+    background: #e8f4fd !important;
+    color: var(--primary) !important;
+    font-weight: 700 !important;
 }
 
-/* ── Page header ── */
+/* ── Page section header (gradient banner) ─── */
 .page-header {
     background: var(--gradient);
-    border-radius: var(--radius); padding: 26px 32px;
-    margin-bottom: 28px; position: relative; overflow: hidden;
+    border-radius: var(--radius);
+    padding: 28px 36px;
+    margin-bottom: 28px;
+    position: relative;
+    overflow: hidden;
 }
-.page-header::before {
-    content:''; position:absolute; top:-40px; right:-40px;
-    width:220px; height:220px; background:rgba(255,255,255,.05); border-radius:50%;
+.page-header::after {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 240px; height: 240px;
+    background: rgba(255,255,255,.05);
+    border-radius: 50%;
+    pointer-events: none;
 }
 .page-header h1 {
-    font-family:'Source Serif 4',Georgia,serif; font-size:1.65rem;
-    font-weight:700; color:#fff !important; margin:0 0 4px; line-height:1.2;
+    font-size: 1.625rem !important;
+    font-weight: 800 !important;
+    color: #fff !important;
+    margin: 0 0 4px !important;
+    line-height: 1.2 !important;
+    letter-spacing: -.3px !important;
 }
-.page-header p { font-size:.88rem; color:rgba(255,255,255,.75); margin:0; }
+.page-header p { font-size: .875rem; color: rgba(255,255,255,.75); margin: 0; }
 
-/* ── Cards ── */
+/* ── Cards ─────────────────────────────────── */
 .card {
-    background:var(--card-bg); border:1px solid var(--border);
-    border-radius:var(--radius); padding:18px 22px;
-    margin-bottom:12px; box-shadow:var(--shadow);
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow);
 }
-.card-green  { border-left:4px solid #1e8c5a; }
-.card-yellow { border-left:4px solid #c97b10; }
-.card-red    { border-left:4px solid #c0392b; }
-.card-blue   { border-left:4px solid var(--blue-mid); }
-.card-gray   { border-left:4px solid #8fa8bf; }
-.card h3 { margin:0 0 6px; font-size:.72rem; color:var(--text-muted); font-weight:700; letter-spacing:.07em; text-transform:uppercase; }
-.card .value { font-size:1.85rem; font-weight:700; color:var(--text-dark); font-variant-numeric:tabular-nums; line-height:1.1; }
-.card .sub   { font-size:.78rem; color:var(--text-muted); margin-top:4px; }
+/* Coloured left accent – kept for stat cards */
+.card-green  { border-left: 4px solid #059669; }
+.card-yellow { border-left: 4px solid #d97706; }
+.card-red    { border-left: 4px solid #dc2626; }
+.card-blue   { border-left: 4px solid var(--primary); }
+.card-gray   { border-left: 4px solid #94a3b8; }
 
-/* ── Badges ── */
-.badge { display:inline-block; padding:3px 11px; border-radius:99px; font-size:.72rem; font-weight:700; letter-spacing:.04em; }
-.badge-working  { background:#d4f5e5; color:#145c38; }
-.badge-pause    { background:#fdefd4; color:#8b5500; }
-.badge-sick     { background:#fde8e6; color:#9b2116; }
-.badge-vacation { background:#d6eaf8; color:#1a4f7a; }
-.badge-offline  { background:#eaeef2; color:#5a7a8a; }
-.badge-pending  { background:#fef6e8; color:#8b5500; }
-.badge-approved { background:#d4f5e5; color:#145c38; }
-.badge-rejected { background:#fde8e6; color:#9b2116; }
+.card h3 {
+    margin: 0 0 6px;
+    font-size: .7rem;
+    color: var(--text-muted);
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+.card .value {
+    font-size: 1.875rem;
+    font-weight: 800;
+    color: var(--text-dark);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+.card .sub { font-size: .75rem; color: var(--text-muted); margin-top: 4px; }
 
-/* ── Person rows ── */
+/* ── Status / request badges ─────────────────  */
+.badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 6px;
+    font-size: .7rem;
+    font-weight: 700;
+    letter-spacing: .03em;
+}
+.badge-working  { background: var(--green-bg);  color: var(--green); }
+.badge-pause    { background: var(--orange-bg); color: var(--orange); }
+.badge-sick     { background: var(--red-bg);    color: var(--red); }
+.badge-vacation { background: var(--blue-bg);   color: var(--primary); }
+.badge-offline  { background: #f1f5f9;          color: #475569; }
+.badge-pending  { background: var(--orange-bg); color: var(--orange); }
+.badge-approved { background: var(--green-bg);  color: var(--green); }
+.badge-rejected { background: var(--red-bg);    color: var(--red); }
+
+/* ── Person rows ────────────────────────────── */
 .person-row {
-    display:flex; align-items:center; gap:14px; padding:11px 16px;
-    background:var(--white); border:1px solid var(--border);
-    border-radius:var(--radius); margin-bottom:7px; box-shadow:var(--shadow);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 18px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    box-shadow: var(--shadow);
 }
 .avatar {
-    width:38px; height:38px; border-radius:50%;
-    display:flex; align-items:center; justify-content:center;
-    font-weight:700; font-size:.9rem; flex-shrink:0;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: .95rem; flex-shrink: 0;
 }
-.person-row .name   { font-weight:600; font-size:.92rem; color:var(--text-dark); }
-.person-row .detail { font-size:.77rem; color:var(--text-muted); }
+.person-row .name   { font-weight: 700; font-size: .9rem;  color: var(--text-dark); }
+.person-row .detail { font-size: .76rem; color: var(--text-muted); }
 
-/* ── Buttons ── */
+/* ── Buttons (global) ───────────────────────── */
 .stButton > button {
-    background:var(--white); color:var(--blue-mid);
-    border:1.5px solid var(--border); border-radius:8px;
-    font-family:'Source Sans 3',sans-serif; font-weight:600;
-    font-size:.88rem; transition:all .15s;
+    background: var(--white) !important;
+    color: var(--primary) !important;
+    border: 1.5px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: .875rem !important;
+    transition: all .15s !important;
 }
-.stButton > button:hover { background:var(--blue-xlight); border-color:var(--blue-mid); color:var(--blue-dark); }
+.stButton > button:hover {
+    background: var(--bg) !important;
+    border-color: var(--primary) !important;
+}
+/* primary = gradient */
 .stButton > button[kind="primary"] {
-    background:var(--blue-mid) !important; color:#fff !important; border-color:var(--blue-mid) !important;
+    background: var(--gradient) !important;
+    color: #fff !important;
+    border: none !important;
 }
-.stButton > button[kind="primary"]:hover { background:var(--blue-dark) !important; border-color:var(--blue-dark) !important; }
-.btn-green  > button { border-color:var(--green)  !important; color:var(--green)  !important; background:var(--green-bg)  !important; }
-.btn-red    > button { border-color:var(--red)    !important; color:var(--red)    !important; background:var(--red-bg)    !important; }
-.btn-yellow > button { border-color:var(--orange) !important; color:var(--orange) !important; background:var(--orange-bg) !important; }
-.btn-green  > button:hover { background:#c8f0e0 !important; }
-.btn-red    > button:hover { background:#f8d8d4 !important; }
-.btn-yellow > button:hover { background:#fde8c4 !important; }
+.stButton > button[kind="primary"]:hover {
+    opacity: .9 !important;
+}
+/* coloured helper wrappers */
+.btn-green  > button { background: var(--green-bg)  !important; color: var(--green)  !important; border-color: #6ee7b7 !important; }
+.btn-red    > button { background: var(--red-bg)    !important; color: var(--red)    !important; border-color: #fca5a5 !important; }
+.btn-yellow > button { background: var(--orange-bg) !important; color: var(--orange) !important; border-color: #fcd34d !important; }
+.btn-green  > button:hover { background: #a7f3d0 !important; }
+.btn-red    > button:hover { background: #fecaca !important; }
+.btn-yellow > button:hover { background: #fde68a !important; }
 
-/* ── Misc ── */
-hr { border-color:var(--border) !important; }
-.stTextInput input, .stSelectbox > div, .stDateInput input, .stTextArea textarea {
-    background:var(--white) !important; border:1.5px solid var(--border) !important;
-    border-radius:8px !important; color:var(--text-dark) !important;
+/* ── Form inputs ────────────────────────────── */
+.stTextInput input,
+.stSelectbox > div,
+.stDateInput input,
+.stTextArea textarea {
+    background: var(--white) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-dark) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: .875rem !important;
 }
-label, .stSelectbox label, .stTextInput label, .stDateInput label, .stTextArea label {
-    color:var(--text-body) !important; font-weight:600 !important; font-size:.84rem !important;
+.stTextInput input:focus,
+.stSelectbox > div:focus-within,
+.stTextArea textarea:focus {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(31,94,140,.1) !important;
 }
-.stTabs [data-baseweb="tab-list"] { background:transparent; border-bottom:2px solid var(--border); gap:0; }
+label,
+.stSelectbox label, .stTextInput label,
+.stDateInput label, .stTextArea label {
+    color: var(--text-body) !important;
+    font-weight: 600 !important;
+    font-size: .8125rem !important;
+}
+
+/* ── Tabs ───────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    background: transparent !important;
+    border-bottom: 1px solid var(--border) !important;
+    gap: 0 !important;
+}
 .stTabs [data-baseweb="tab"] {
-    background:transparent; color:var(--text-muted); font-weight:600;
-    font-size:.87rem; border-bottom:2px solid transparent; padding:10px 18px; margin-bottom:-2px;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    font-weight: 600 !important;
+    font-size: .875rem !important;
+    border-bottom: 2px solid transparent !important;
+    padding: 10px 18px !important;
+    margin-bottom: -1px !important;
 }
-.stTabs [aria-selected="true"] { color:var(--blue-mid) !important; border-bottom:2px solid var(--blue-mid) !important; background:transparent !important; }
-.stDataFrame { border:1px solid var(--border) !important; border-radius:var(--radius) !important; overflow:hidden; }
-.stSuccess { background:var(--green-bg) !important; color:var(--green) !important; border-color:#a8dfc6 !important; }
-.stInfo    { background:var(--blue-xlight) !important; color:var(--blue-dark) !important; }
+.stTabs [aria-selected="true"] {
+    color: var(--primary) !important;
+    border-bottom: 2px solid var(--primary) !important;
+    background: transparent !important;
+}
+
+/* ── Dataframe ──────────────────────────────── */
+.stDataFrame {
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    overflow: hidden !important;
+    box-shadow: var(--shadow) !important;
+}
+
+/* ── Alerts ─────────────────────────────────── */
+.stSuccess { background: var(--green-bg) !important; color: var(--green) !important; border-radius: var(--radius-sm) !important; }
+.stInfo    { background: var(--blue-bg)  !important; color: var(--primary) !important; border-radius: var(--radius-sm) !important; }
+.stWarning { background: var(--orange-bg)!important; color: var(--orange) !important; border-radius: var(--radius-sm) !important; }
+.stError   { background: var(--red-bg)   !important; color: var(--red)    !important; border-radius: var(--radius-sm) !important; }
+
+/* ── Expander ───────────────────────────────── */
 .streamlit-expanderHeader {
-    background:var(--white) !important; border:1px solid var(--border) !important;
-    border-radius:8px !important; color:var(--text-dark) !important; font-weight:600 !important;
+    background: var(--white) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-dark) !important;
+    font-weight: 700 !important;
+    font-size: .875rem !important;
 }
-.sidebar-divider { height:1px; background:var(--border); margin:14px 0; }
+
+/* ── Misc ───────────────────────────────────── */
+hr { border-color: var(--border) !important; }
+.sidebar-divider { height: 1px; background: var(--border); margin: 12px 0; }
+
+/* Stat number pull-out (JSX style) */
+.stat-val {
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--primary);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -1px;
+    line-height: 1;
+}
+.stat-label {
+    font-size: .6875rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 4px;
+}
+.stat-sub { font-size: .75rem; color: var(--text-muted); margin-top: 6px; }
+
+/* Clock widget inner block */
+.clock-block {
+    background: #f0f7ff;
+    border-radius: 10px;
+    padding: 12px 20px;
+    display: inline-block;
+    text-align: center;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -683,26 +837,41 @@ def correction_status_badge(status: str) -> str:
 def page_login():
     st.markdown("""<style>
     .stApp { background: linear-gradient(120deg,#0b5390 0%,#158bc8 81%) !important; }
-    .main .block-container { padding-top: 4rem; }
+    .main .block-container { padding-top: 5rem; }
     </style>""", unsafe_allow_html=True)
 
     _, col, _ = st.columns([1, 1.1, 1])
     with col:
+        # Card top – logo + title
         st.markdown(f"""
-        <div style="background:#fff;border-radius:14px 14px 0 0;padding:32px 36px 20px;
-                    box-shadow:0 8px 40px rgba(11,83,144,.35);text-align:center">
-            {logo_img_tag(white=False, height=56)}
-            <div style="height:16px"></div>
-            <div style="font-size:.78rem;color:#7a93ab">Docházkový systém – Exekutorský úřad Praha 4</div>
+        <div style="background:#fff;border-radius:14px 14px 0 0;
+                    padding:36px 40px 24px;
+                    box-shadow:0 8px 40px rgba(11,83,144,.3);
+                    text-align:center">
+            <div style="display:flex;justify-content:center;margin-bottom:20px">
+                {logo_img_tag(white=False, height=56)}
+            </div>
+            <div style="font-size:1.1rem;font-weight:800;color:#1e293b;
+                        letter-spacing:-.3px;margin-bottom:4px">
+                Docházkový systém
+            </div>
+            <div style="font-size:.8rem;color:#64748b">
+                Exekutorský úřad Praha 4 – Mgr. Jan Škarpa
+            </div>
         </div>""", unsafe_allow_html=True)
 
-        with st.container():
-            st.markdown('<div style="background:#fff;border-radius:0 0 14px 14px;padding:4px 36px 32px;box-shadow:0 8px 40px rgba(11,83,144,.35);">', unsafe_allow_html=True)
-            with st.form("login_form"):
-                username = st.text_input("Uživatelské jméno", placeholder="jmeno.prijmeni")
-                password = st.text_input("Heslo", type="password", placeholder="••••••••")
-                submitted = st.form_submit_button("Přihlásit se →", use_container_width=True, type="primary")
-            st.markdown('</div>', unsafe_allow_html=True)
+        # Card bottom – form
+        st.markdown("""
+        <div style="background:#fff;border-radius:0 0 14px 14px;
+                    padding:4px 40px 32px;
+                    box-shadow:0 8px 40px rgba(11,83,144,.3);">
+        """, unsafe_allow_html=True)
+        with st.form("login_form"):
+            username  = st.text_input("Uživatelské jméno", placeholder="jmeno.prijmeni")
+            password  = st.text_input("Heslo", type="password", placeholder="••••••••")
+            submitted = st.form_submit_button("Přihlásit se →",
+                                              use_container_width=True, type="primary")
+        st.markdown('</div>', unsafe_allow_html=True)
 
         if submitted:
             user = authenticate(username, password)
@@ -712,7 +881,11 @@ def page_login():
             else:
                 st.error("Nesprávné přihlašovací údaje.")
 
-        st.markdown('<p style="text-align:center;color:rgba(255,255,255,.45);font-size:.75rem;margin-top:18px">Výchozí admin: admin / admin123</p>', unsafe_allow_html=True)
+        st.markdown("""
+        <p style="text-align:center;color:rgba(255,255,255,.45);
+                  font-size:.75rem;margin-top:18px">
+            Výchozí admin: admin / admin123
+        </p>""", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
@@ -1385,28 +1558,37 @@ else:
     is_admin = user["role"] == "admin"
 
     with st.sidebar:
-        # Logo – bílé logo na tmavém pruhu, modré logo na bílém pozadí
-        logo_p = logo_st_path(white=False)
-        if logo_p:
-            st.image(str(logo_p), use_container_width=True)
-        else:
-            st.markdown(logo_img_tag(white=False, height=48), unsafe_allow_html=True)
-
+        # ── Logo (modré – světlé pozadí sidebaru) ──
         st.markdown(f"""
-        <div style="text-align:center;margin-bottom:4px">
-            <div style="font-size:.72rem;color:#7a93ab;letter-spacing:.04em">
+        <div style="padding:20px 16px 12px;border-bottom:1px solid var(--border)">
+            {logo_img_tag(white=False, height=44)}
+            <div style="font-size:.72rem;color:#94a3b8;margin-top:6px;font-weight:500">
                 Docházkový systém
             </div>
         </div>
-        <div class="sidebar-divider"></div>
-        <div style="display:flex;align-items:center;gap:10px;padding:4px 4px 8px">
-            {avatar_html(user['display_name'], user.get('color','#1f5e8c'))}
+        """, unsafe_allow_html=True)
+
+        # ── User chip ──
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:10px;
+                    padding:14px 16px 10px;border-bottom:1px solid var(--border)">
+            <div style="width:32px;height:32px;border-radius:16px;
+                        background:{'linear-gradient(120deg,#0b5390,#158bc8)' if is_admin else '#e0f2fe'};
+                        display:flex;align-items:center;justify-content:center;
+                        color:{'#fff' if is_admin else '#1f5e8c'};
+                        font-weight:800;font-size:.85rem;flex-shrink:0">
+                {user['display_name'][0].upper()}
+            </div>
             <div>
-                <div style="font-weight:700;font-size:.9rem;color:#1a2e4a">{user['display_name']}</div>
-                <div style="font-size:.73rem;color:#7a93ab">{'Administrátor' if is_admin else 'Zaměstnanec'}</div>
+                <div style="font-weight:700;font-size:.875rem;color:#1e293b;line-height:1.2">
+                    {user['display_name']}
+                </div>
+                <div style="font-size:.72rem;color:#94a3b8">
+                    {'Administrátor' if is_admin else 'Zaměstnanec'}
+                </div>
             </div>
         </div>
-        <div class="sidebar-divider"></div>
+        <div style="height:12px"></div>
         """, unsafe_allow_html=True)
 
         if "page" not in st.session_state:
@@ -1428,8 +1610,13 @@ else:
                 st.session_state.page = key
                 st.rerun()
 
-        st.markdown("<div class='sidebar-divider'></div>", unsafe_allow_html=True)
-        st.markdown(f'<div style="font-size:.7rem;color:#b0bec5;text-align:center;margin-bottom:6px">CET: {cet_now().strftime("%d.%m.%Y %H:%M")}</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="height:1px;background:var(--border);margin:8px 0 10px"></div>
+        <div style="font-size:.7rem;color:#94a3b8;text-align:center;padding:4px 0 8px;
+                    font-variant-numeric:tabular-nums">
+            ⏱ CET: {cet_now().strftime("%d.%m.%Y %H:%M")}
+        </div>
+        """, unsafe_allow_html=True)
         if st.button("🚪 Odhlásit se", use_container_width=True):
             del st.session_state.user
             st.session_state.page = "dashboard"
@@ -1448,3 +1635,18 @@ else:
         page_reports()
     elif page == "admin" and is_admin:
         page_admin()
+
+    # ── Footer – shodný s JSX ──────────────────────────────
+    st.markdown(f"""
+    <div style="background:linear-gradient(120deg,#0b5390 0%,#158bc8 81%);
+                color:rgba(255,255,255,.7);
+                padding:16px 48px;margin-top:48px;
+                display:flex;align-items:center;justify-content:space-between;
+                font-size:.75rem;border-radius:14px;">
+        <div style="display:flex;align-items:center;gap:12px">
+            {logo_img_tag(white=True, height=28)}
+            <span>Exekutorský úřad Praha 4 – Mgr. Jan Škarpa</span>
+        </div>
+        <span>© {cet_now().year} eupraha.cz</span>
+    </div>
+    """, unsafe_allow_html=True)
