@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 import hashlib
 import os
+import io
 from datetime import datetime, date, timedelta, time
 from pathlib import Path
 
@@ -19,118 +20,311 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# CUSTOM CSS
+# CUSTOM CSS  –  Exekutor Plus brand (light)
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&family=Source+Serif+4:wght@600;700&display=swap');
+
+/* ── Tokens ────────────────────────────────── */
+:root {
+    --blue-dark:   #1a3a5c;
+    --blue-mid:    #1a6aaa;
+    --blue-bright: #2196c8;
+    --blue-light:  #e8f3fb;
+    --blue-xlight: #f0f7fd;
+    --teal:        #2a9fd6;
+    --white:       #ffffff;
+    --bg:          #f4f7fa;
+    --card-bg:     #ffffff;
+    --border:      #dce6ef;
+    --text-dark:   #1a2e4a;
+    --text-body:   #3a5068;
+    --text-muted:  #7a93ab;
+    --green:       #1e8c5a;
+    --green-bg:    #eaf7f1;
+    --orange:      #c97b10;
+    --orange-bg:   #fef6e8;
+    --red:         #c0392b;
+    --red-bg:      #fdf0ee;
+    --radius:      10px;
+    --shadow:      0 2px 8px rgba(26,58,92,.08);
+    --shadow-md:   0 4px 16px rgba(26,58,92,.12);
+}
 
 html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif !important;
+    color: var(--text-body);
 }
 
+/* ── App background ─────────────────────────── */
 .stApp {
-    background: #0f1117;
-    color: #e8eaf0;
+    background: var(--bg) !important;
+}
+.main .block-container {
+    padding-top: 2rem;
+    max-width: 1280px;
 }
 
-/* Sidebar */
+/* ── Sidebar ────────────────────────────────── */
 [data-testid="stSidebar"] {
-    background: #161b27 !important;
-    border-right: 1px solid #252d3d;
+    background: var(--white) !important;
+    border-right: 1px solid var(--border) !important;
 }
 [data-testid="stSidebar"] * {
-    color: #c9cde0 !important;
+    color: var(--text-body) !important;
+}
+[data-testid="stSidebar"] .stButton > button {
+    background: transparent !important;
+    color: var(--text-body) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    text-align: left !important;
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+    padding: 9px 14px !important;
+    transition: all .15s !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: var(--blue-xlight) !important;
+    color: var(--blue-mid) !important;
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background: var(--blue-mid) !important;
+    color: var(--white) !important;
+    font-weight: 600 !important;
 }
 
-/* Cards */
+/* ── Page header banner ─────────────────────── */
+.page-header {
+    background: linear-gradient(135deg, var(--blue-dark) 0%, var(--blue-bright) 100%);
+    border-radius: var(--radius);
+    padding: 28px 32px 26px;
+    margin-bottom: 28px;
+    position: relative;
+    overflow: hidden;
+}
+.page-header::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 200px; height: 200px;
+    background: rgba(255,255,255,.05);
+    border-radius: 50%;
+}
+.page-header h1 {
+    font-family: 'Source Serif 4', Georgia, serif;
+    font-size: 1.7rem;
+    font-weight: 700;
+    color: #ffffff !important;
+    margin: 0 0 4px 0;
+    line-height: 1.2;
+}
+.page-header p {
+    font-size: 0.9rem;
+    color: rgba(255,255,255,.75);
+    margin: 0;
+}
+
+/* ── Stat cards ──────────────────────────────── */
 .card {
-    background: #161b27;
-    border: 1px solid #252d3d;
-    border-radius: 12px;
-    padding: 20px 24px;
-    margin-bottom: 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow);
 }
-.card-green  { border-left: 4px solid #22c55e; }
-.card-yellow { border-left: 4px solid #eab308; }
-.card-red    { border-left: 4px solid #ef4444; }
-.card-blue   { border-left: 4px solid #3b82f6; }
-.card-gray   { border-left: 4px solid #6b7280; }
+.card-green  { border-left: 4px solid #1e8c5a; }
+.card-yellow { border-left: 4px solid #c97b10; }
+.card-red    { border-left: 4px solid #c0392b; }
+.card-blue   { border-left: 4px solid var(--blue-mid); }
+.card-gray   { border-left: 4px solid #8fa8bf; }
 
-.card h3 { margin: 0 0 4px 0; font-size: 0.85rem; color: #6b7280; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; }
-.card .value { font-size: 2rem; font-weight: 700; color: #e8eaf0; font-family: 'DM Mono', monospace; }
-.card .sub   { font-size: 0.8rem; color: #6b7280; margin-top: 4px; }
+.card h3 {
+    margin: 0 0 6px 0;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+.card .value {
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: var(--text-dark);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+.card .sub { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; }
 
-/* Status badges */
+/* ── Badges ─────────────────────────────────── */
 .badge {
     display: inline-block;
-    padding: 3px 10px;
+    padding: 3px 11px;
     border-radius: 99px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.03em;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
 }
-.badge-working  { background: #14532d; color: #4ade80; }
-.badge-pause    { background: #713f12; color: #fbbf24; }
-.badge-sick     { background: #450a0a; color: #f87171; }
-.badge-vacation { background: #1e3a5f; color: #60a5fa; }
-.badge-offline  { background: #1f2937; color: #9ca3af; }
+.badge-working  { background: #d4f5e5; color: #145c38; }
+.badge-pause    { background: #fdefd4; color: #8b5500; }
+.badge-sick     { background: #fde8e6; color: #9b2116; }
+.badge-vacation { background: #d6eaf8;  color: #1a4f7a; }
+.badge-offline  { background: #eaeef2; color: #5a7a8a; }
 
-/* Person row */
+/* ── Person rows ────────────────────────────── */
 .person-row {
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 12px 16px;
-    background: #1c2232;
-    border-radius: 10px;
-    margin-bottom: 8px;
+    padding: 11px 16px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 7px;
+    box-shadow: var(--shadow);
 }
 .avatar {
     width: 38px; height: 38px;
     border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    font-weight: 700; font-size: 0.95rem;
+    font-weight: 700; font-size: 0.9rem;
     flex-shrink: 0;
+    border: 2px solid rgba(255,255,255,.6);
 }
-.person-row .name { font-weight: 600; font-size: 0.95rem; color: #e8eaf0; }
-.person-row .detail { font-size: 0.78rem; color: #9ca3af; }
+.person-row .name   { font-weight: 600; font-size: 0.92rem; color: var(--text-dark); }
+.person-row .detail { font-size: 0.77rem; color: var(--text-muted); }
 
-/* Headings */
-h1.page-title {
-    font-size: 1.6rem; font-weight: 700; color: #e8eaf0;
-    margin-bottom: 4px;
-}
-.page-sub { font-size: 0.9rem; color: #6b7280; margin-bottom: 24px; }
-
-/* Big action buttons */
+/* ── Buttons ─────────────────────────────────── */
 .stButton > button {
-    background: #1c2232;
-    color: #e8eaf0;
-    border: 1px solid #252d3d;
-    border-radius: 10px;
-    font-family: 'DM Sans', sans-serif;
+    background: var(--white);
+    color: var(--blue-mid);
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-family: 'Source Sans 3', sans-serif;
     font-weight: 600;
+    font-size: 0.88rem;
     transition: all .15s;
 }
 .stButton > button:hover {
-    background: #252d3d;
-    border-color: #3b4a6b;
-    color: #fff;
+    background: var(--blue-xlight);
+    border-color: var(--blue-mid);
+    color: var(--blue-dark);
 }
-.btn-green > button { border-color: #22c55e !important; color: #22c55e !important; }
-.btn-red > button   { border-color: #ef4444 !important; color: #ef4444 !important; }
-.btn-yellow > button{ border-color: #eab308 !important; color: #eab308 !important; }
-.btn-blue > button  { border-color: #3b82f6 !important; color: #3b82f6 !important; }
+.stButton > button[kind="primary"] {
+    background: var(--blue-mid) !important;
+    color: #ffffff !important;
+    border-color: var(--blue-mid) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background: var(--blue-dark) !important;
+    border-color: var(--blue-dark) !important;
+}
 
-/* Divider */
-hr { border-color: #252d3d !important; }
+.btn-green  > button { border-color: var(--green)  !important; color: var(--green)  !important; background: var(--green-bg)  !important; }
+.btn-red    > button { border-color: var(--red)    !important; color: var(--red)    !important; background: var(--red-bg)    !important; }
+.btn-yellow > button { border-color: var(--orange) !important; color: var(--orange) !important; background: var(--orange-bg) !important; }
+.btn-blue   > button { border-color: var(--blue-mid) !important; color: var(--white) !important; background: var(--blue-mid) !important; }
 
-/* Table */
-.dataframe { background: #161b27 !important; }
+.btn-green  > button:hover { background: #c8f0e0 !important; }
+.btn-red    > button:hover { background: #f8d8d4 !important; }
+.btn-yellow > button:hover { background: #fde8c4 !important; }
+.btn-blue   > button:hover { background: var(--blue-dark) !important; }
 
-/* Input labels */
-label { color: #c9cde0 !important; }
+/* ── Divider ─────────────────────────────────── */
+hr { border-color: var(--border) !important; }
+
+/* ── Inputs / selects ───────────────────────── */
+.stTextInput input,
+.stSelectbox > div,
+.stDateInput input {
+    background: var(--white) !important;
+    border: 1.5px solid var(--border) !important;
+    border-radius: 8px !important;
+    color: var(--text-dark) !important;
+}
+.stTextInput input:focus,
+.stSelectbox > div:focus-within {
+    border-color: var(--blue-mid) !important;
+    box-shadow: 0 0 0 3px rgba(26,106,170,.12) !important;
+}
+label, .stSelectbox label, .stTextInput label, .stDateInput label {
+    color: var(--text-body) !important;
+    font-weight: 600 !important;
+    font-size: 0.84rem !important;
+}
+
+/* ── Tabs ────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    background: transparent;
+    border-bottom: 2px solid var(--border);
+    gap: 0;
+}
+.stTabs [data-baseweb="tab"] {
+    background: transparent;
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.87rem;
+    border-bottom: 2px solid transparent;
+    padding: 10px 18px;
+    margin-bottom: -2px;
+}
+.stTabs [aria-selected="true"] {
+    color: var(--blue-mid) !important;
+    border-bottom: 2px solid var(--blue-mid) !important;
+    background: transparent !important;
+}
+
+/* ── Dataframe ───────────────────────────────── */
+.stDataFrame {
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    overflow: hidden;
+}
+
+/* ── Alerts ──────────────────────────────────── */
+.stAlert {
+    border-radius: var(--radius) !important;
+}
+.stSuccess { background: var(--green-bg) !important; color: var(--green) !important; border-color: #a8dfc6 !important; }
+.stWarning { background: var(--orange-bg) !important; color: var(--orange) !important; }
+.stError   { background: var(--red-bg) !important; color: var(--red) !important; }
+.stInfo    { background: var(--blue-xlight) !important; color: var(--blue-dark) !important; }
+
+/* ── Expander ─────────────────────────────────── */
+.streamlit-expanderHeader {
+    background: var(--white) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    color: var(--text-dark) !important;
+    font-weight: 600 !important;
+}
+
+/* ── Sidebar brand block ─────────────────────── */
+.sidebar-brand {
+    background: linear-gradient(135deg, var(--blue-dark), var(--blue-bright));
+    border-radius: var(--radius);
+    padding: 18px 16px 16px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+.sidebar-brand .brand-icon { font-size: 2rem; line-height: 1; }
+.sidebar-brand .brand-title {
+    font-family: 'Source Serif 4', serif;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: rgba(255,255,255,.9);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-top: 6px;
+}
+.sidebar-brand .brand-sub {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,.6);
+    margin-top: 2px;
+}
+.sidebar-divider { height: 1px; background: var(--border); margin: 16px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -472,9 +666,10 @@ def get_status_overview():
 # ─────────────────────────────────────────────
 AVATAR_COLORS = ["#3b82f6","#8b5cf6","#ec4899","#14b8a6","#f97316","#22c55e","#ef4444","#eab308"]
 
-def avatar_html(name: str, color: str = "#3b82f6") -> str:
+def avatar_html(name: str, color: str = "#1a6aaa") -> str:
     initials = "".join([w[0].upper() for w in name.split()[:2]])
-    return f'<div class="avatar" style="background:{color}20;color:{color}">{initials}</div>'
+    # lighter tint bg, solid color text
+    return f'<div class="avatar" style="background:{color}22;color:{color};border:2px solid {color}44">{initials}</div>'
 
 STATUS_LABEL = {
     "working": ("Pracuje", "working"),
@@ -491,17 +686,36 @@ PAUSE_TYPES = ["🍽 Oběd", "🏥 Doktor", "☕ Přestávka", "📦 Jiné"]
 # PAGE: LOGIN
 # ─────────────────────────────────────────────
 def page_login():
-    col1, col2, col3 = st.columns([1, 1.4, 1])
-    with col2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown('<div style="text-align:center;font-size:3rem;margin-bottom:8px">🕐</div>', unsafe_allow_html=True)
-        st.markdown('<h1 style="text-align:center;color:#e8eaf0;font-size:1.8rem;margin-bottom:4px">Docházkový systém</h1>', unsafe_allow_html=True)
-        st.markdown('<p style="text-align:center;color:#6b7280;margin-bottom:32px">Přihlaste se ke svému účtu</p>', unsafe_allow_html=True)
+    # Full-page gradient background for login
+    st.markdown("""<style>
+    .stApp { background: linear-gradient(135deg, #1a3a5c 0%, #2196c8 100%) !important; }
+    .main .block-container { padding-top: 4rem; }
+    </style>""", unsafe_allow_html=True)
 
-        with st.form("login_form"):
-            username = st.text_input("Uživatelské jméno", placeholder="jmeno")
-            password = st.text_input("Heslo", type="password", placeholder="••••••••")
-            submitted = st.form_submit_button("Přihlásit se", use_container_width=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    with col2:
+        st.markdown("""
+        <div style="background:#fff;border-radius:14px;padding:36px 36px 28px;
+                    box-shadow:0 8px 40px rgba(26,58,92,.28);text-align:center;margin-bottom:0">
+            <div style="font-size:2.4rem;margin-bottom:8px">🏛️</div>
+            <div style="font-family:'Source Serif 4',Georgia,serif;font-size:1.1rem;
+                        font-weight:700;color:#1a3a5c;letter-spacing:.04em;
+                        text-transform:uppercase;margin-bottom:2px">
+                Docházkový systém
+            </div>
+            <div style="font-size:0.78rem;color:#7a93ab;margin-bottom:24px">
+                Exekutorský úřad Praha 4
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.container():
+            st.markdown('<div style="background:#fff;border-radius:0 0 14px 14px;padding:0 36px 28px;box-shadow:0 8px 40px rgba(26,58,92,.28);">', unsafe_allow_html=True)
+            with st.form("login_form"):
+                username = st.text_input("Uživatelské jméno", placeholder="jmeno.prijmeni")
+                password = st.text_input("Heslo", type="password", placeholder="••••••••")
+                submitted = st.form_submit_button("Přihlásit se →", use_container_width=True, type="primary")
+            st.markdown('</div>', unsafe_allow_html=True)
 
         if submitted:
             user = authenticate(username, password)
@@ -511,14 +725,16 @@ def page_login():
             else:
                 st.error("Nesprávné přihlašovací údaje.")
 
-        st.markdown('<p style="text-align:center;color:#374151;font-size:0.78rem;margin-top:24px">Výchozí admin: admin / admin123</p>', unsafe_allow_html=True)
+        st.markdown('<p style="text-align:center;color:rgba(255,255,255,.4);font-size:0.75rem;margin-top:20px">Výchozí admin: admin / admin123</p>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # PAGE: DASHBOARD (today overview)
 # ─────────────────────────────────────────────
 def page_dashboard():
-    st.markdown('<h1 class="page-title">Přehled dne</h1>', unsafe_allow_html=True)
-    st.markdown(f'<p class="page-sub">{date.today().strftime("%A, %d. %m. %Y")}</p>', unsafe_allow_html=True)
+    st.markdown(f"""<div class="page-header">
+        <h1>📊 Přehled dne</h1>
+        <p>{date.today().strftime("%A, %d. %m. %Y")}</p>
+    </div>""", unsafe_allow_html=True)
 
     overview = get_status_overview()
 
@@ -537,7 +753,7 @@ def page_dashboard():
     with c2:
         st.markdown(f"""<div class="card card-red">
             <h3>Nemocní</h3><div class="value">{len(sick)}</div>
-            <div class="sub">sickday</div></div>""", unsafe_allow_html=True)
+            <div class="sub">sickday / nemoc</div></div>""", unsafe_allow_html=True)
     with c3:
         st.markdown(f"""<div class="card card-blue">
             <h3>Dovolená</h3><div class="value">{len(vacation)}</div>
@@ -552,7 +768,7 @@ def page_dashboard():
     def render_group(title, users, show_checkin=False):
         if not users:
             return
-        st.markdown(f"**{title}**")
+        st.markdown(f'<div style="font-size:0.78rem;font-weight:700;color:#7a93ab;letter-spacing:.06em;text-transform:uppercase;margin:16px 0 8px">{title}</div>', unsafe_allow_html=True)
         for u in users:
             label, badge_cls = STATUS_LABEL.get(u["status"], ("", "offline"))
             detail_str = f" · {u['detail']}" if u["detail"] else ""
@@ -582,8 +798,10 @@ def page_dashboard():
 # ─────────────────────────────────────────────
 def page_my_attendance():
     user = st.session_state.user
-    st.markdown('<h1 class="page-title">Moje docházka</h1>', unsafe_allow_html=True)
-    st.markdown(f'<p class="page-sub">Dnes: {date.today().strftime("%d. %m. %Y")}</p>', unsafe_allow_html=True)
+    st.markdown(f"""<div class="page-header">
+        <h1>🕐 Moje docházka</h1>
+        <p>Dnes: {date.today().strftime("%d. %m. %Y")}</p>
+    </div>""", unsafe_allow_html=True)
 
     # Check today's absence
     absences_today = get_absences_for_date()
@@ -605,25 +823,25 @@ def page_my_attendance():
             op = open_pauses[0]
             st.markdown(f"""<div class="card card-yellow">
                 <h3>Aktuální stav</h3>
-                <div class="value">⏸ Pauza</div>
+                <div class="value" style="color:#8b5500">⏸ Pauza</div>
                 <div class="sub">{op['pause_type']} od {op['start_time'][:5]} · odpracováno {seconds_to_hm(worked)}</div>
             </div>""", unsafe_allow_html=True)
         elif att["checkout_time"]:
             st.markdown(f"""<div class="card card-gray">
                 <h3>Aktuální stav</h3>
-                <div class="value">✅ Odhlášen/a</div>
+                <div class="value" style="color:#5a7a8a">✅ Odhlášen/a</div>
                 <div class="sub">Příchod {att['checkin_time'][:5]} · Odchod {att['checkout_time'][:5]} · Odpracováno {seconds_to_hm(worked)}</div>
             </div>""", unsafe_allow_html=True)
         else:
             st.markdown(f"""<div class="card card-green">
                 <h3>Aktuální stav</h3>
-                <div class="value">▶ Pracuješ</div>
+                <div class="value" style="color:#145c38">▶ Pracuješ</div>
                 <div class="sub">Příchod {att['checkin_time'][:5]} · Odpracováno {seconds_to_hm(worked)}</div>
             </div>""", unsafe_allow_html=True)
     else:
         st.markdown("""<div class="card card-gray">
             <h3>Aktuální stav</h3>
-            <div class="value">⭕ Offline</div>
+            <div class="value" style="color:#5a7a8a">⭕ Offline</div>
             <div class="sub">Ještě jsi nezaznamenal/a příchod</div>
         </div>""", unsafe_allow_html=True)
 
@@ -708,31 +926,33 @@ def page_my_attendance():
     with c1:
         st.markdown(f"""<div class="card card-blue">
             <h3>Celkem odpracováno</h3>
-            <div class="value">{seconds_to_hm(total_seconds)}</div>
+            <div class="value" style="color:#1a3a5c">{seconds_to_hm(total_seconds)}</div>
             <div class="sub">vč. {seconds_to_hm(weekend_seconds)} víkend</div>
         </div>""", unsafe_allow_html=True)
     with c2:
         st.markdown(f"""<div class="card card-gray">
             <h3>Fond pracovní doby</h3>
-            <div class="value">{seconds_to_hm(expected_seconds)}</div>
+            <div class="value" style="color:#3a5068">{seconds_to_hm(expected_seconds)}</div>
             <div class="sub">{workdays_so_far} pracovních dní</div>
         </div>""", unsafe_allow_html=True)
     with c3:
         color = "green" if diff >= 0 else "red"
+        val_color = "#145c38" if diff >= 0 else "#9b2116"
         sign = "+" if diff >= 0 else ""
         label = "Přesčas" if diff >= 0 else "Deficit"
         st.markdown(f"""<div class="card card-{color}">
             <h3>{label}</h3>
-            <div class="value">{sign}{seconds_to_hm(abs(diff))}</div>
+            <div class="value" style="color:{val_color}">{sign}{seconds_to_hm(abs(diff))}</div>
             <div class="sub">vs. fond {seconds_to_hm(expected_seconds)}</div>
         </div>""", unsafe_allow_html=True)
     with c4:
         days_worked = len([s for s in stats if s["worked_seconds"] > 0 and not s["is_weekend"]])
         avg = (weekday_seconds // days_worked) if days_worked > 0 else 0
         c = "green" if avg >= 8 * 3600 else "yellow" if avg >= 6 * 3600 else "red"
+        val_c = "#145c38" if avg >= 8*3600 else "#8b5500" if avg >= 6*3600 else "#9b2116"
         st.markdown(f"""<div class="card card-{c}">
             <h3>Průměr / den</h3>
-            <div class="value">{seconds_to_hm(avg)}</div>
+            <div class="value" style="color:{val_c}">{seconds_to_hm(avg)}</div>
             <div class="sub">z {days_worked} odpracovaných dní</div>
         </div>""", unsafe_allow_html=True)
 
@@ -751,20 +971,31 @@ def page_my_attendance():
 # ─────────────────────────────────────────────
 def page_absences():
     user = st.session_state.user
-    st.markdown('<h1 class="page-title">Absence</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="page-sub">Nahlášení sickday nebo dovolené</p>', unsafe_allow_html=True)
+    st.markdown("""<div class="page-header">
+        <h1>🏖 Absence</h1>
+        <p>Nahlášení sickday nebo dovolené</p>
+    </div>""", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["➕ Nová žádost", "📋 Moje absence"])
 
     with tab1:
-        col1, col2 = st.columns(2)
-        with col1:
-            abs_type = st.selectbox("Typ", ["sickday", "vacation"],
-                                    format_func=lambda x: "🤒 Sickday" if x == "sickday" else "🏖 Dovolená")
-            date_from = st.date_input("Od", value=date.today(), min_value=date.today() - timedelta(days=30))
-        with col2:
-            date_to = st.date_input("Do", value=date.today())
-            note = st.text_input("Poznámka (nepovinné)")
+        abs_type = st.selectbox("Typ", ["sickday", "vacation"],
+                                format_func=lambda x: "🤒 Sickday" if x == "sickday" else "🏖 Dovolená")
+
+        if abs_type == "sickday":
+            sick_date = st.date_input("Den nemoci", value=date.today(),
+                                      min_value=date.today() - timedelta(days=30))
+            date_from = sick_date
+            date_to = sick_date
+        else:
+            col_od, col_do = st.columns(2)
+            with col_od:
+                date_from = st.date_input("Od", value=date.today(),
+                                          min_value=date.today() - timedelta(days=30))
+            with col_do:
+                date_to = st.date_input("Do", value=date.today())
+
+        note = st.text_input("Poznámka (nepovinné)")
 
         if st.button("Odeslat žádost", type="primary"):
             if date_to < date_from:
@@ -783,11 +1014,13 @@ def page_absences():
             status_map = {0: ("⏳ Čeká na schválení", "yellow"), 1: ("✅ Schváleno", "green"), -1: ("❌ Zamítnuto", "red")}
             status_str, s_color = status_map.get(a["approved"], ("?", "gray"))
             note_str = f" · {a['note']}" if a["note"] else ""
+            date_str = a["date_from"] if a["date_from"] == a["date_to"] else f"{a['date_from']} – {a['date_to']}"
             st.markdown(f"""<div class="card card-{s_color}">
                 <div style="display:flex;justify-content:space-between;align-items:center">
                     <div>
-                        <strong>{type_label}</strong> · {a['date_from']} – {a['date_to']}{note_str}<br>
-                        <small style="color:#9ca3af">{status_str}</small>
+                        <strong style="color:#1a2e4a">{type_label}</strong>
+                        <span style="color:#3a5068"> · {date_str}{note_str}</span><br>
+                        <small style="color:#7a93ab">{status_str}</small>
                     </div>
                 </div>
             </div>""", unsafe_allow_html=True)
@@ -802,7 +1035,10 @@ def page_absences():
 def page_reports():
     user = st.session_state.user
     is_admin = user["role"] == "admin"
-    st.markdown('<h1 class="page-title">Výkazy docházky</h1>', unsafe_allow_html=True)
+    st.markdown("""<div class="page-header">
+        <h1>📈 Výkazy docházky</h1>
+        <p>Měsíční přehled odpracovaných hodin</p>
+    </div>""", unsafe_allow_html=True)
 
     today = date.today()
     col1, col2, col3 = st.columns(3)
@@ -851,13 +1087,41 @@ def page_reports():
         df = pd.DataFrame(all_rows)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
+        # ── CSV export
         csv = df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
-        st.download_button(
-            "⬇ Stáhnout CSV",
-            data=csv,
-            file_name=f"dochazka_{year}_{month:02d}.csv",
-            mime="text/csv",
-        )
+
+        # ── XLSX export (summary sheet + per-user daily sheets)
+        xlsx_buf = io.BytesIO()
+        with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:
+            df.to_excel(writer, sheet_name="Přehled", index=False)
+            for tu in target_users:
+                stats = get_month_stats(tu["id"], year, month)
+                if stats:
+                    df_day = pd.DataFrame(stats)
+                    df_day["Odpracováno"] = df_day["worked_seconds"].apply(seconds_to_hm)
+                    df_day["Typ dne"] = df_day["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
+                    df_day = df_day[["date","checkin","checkout","Odpracováno","Typ dne"]].rename(columns={
+                        "date": "Datum", "checkin": "Příchod", "checkout": "Odchod"
+                    })
+                    sheet_name = tu["display_name"][:31]  # Excel sheet name max 31 chars
+                    df_day.to_excel(writer, sheet_name=sheet_name, index=False)
+        xlsx_buf.seek(0)
+
+        dl_col1, dl_col2, _ = st.columns([1, 1, 4])
+        with dl_col1:
+            st.download_button(
+                "⬇ Stáhnout CSV",
+                data=csv,
+                file_name=f"dochazka_{year}_{month:02d}.csv",
+                mime="text/csv",
+            )
+        with dl_col2:
+            st.download_button(
+                "⬇ Stáhnout XLSX",
+                data=xlsx_buf,
+                file_name=f"dochazka_{year}_{month:02d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
         if len(target_users) == 1 and (is_admin or selected_uid == user["id"]):
             st.markdown("---")
@@ -877,9 +1141,12 @@ def page_reports():
 # PAGE: ADMIN – MANAGE
 # ─────────────────────────────────────────────
 def page_admin():
-    st.markdown('<h1 class="page-title">Správa uživatelů</h1>', unsafe_allow_html=True)
+    st.markdown("""<div class="page-header">
+        <h1>⚙️ Správa uživatelů</h1>
+        <p>Uživatelé, nemoci, schvalování absencí</p>
+    </div>""", unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["👥 Uživatelé", "➕ Nový uživatel", "✅ Schválení absencí"])
+    tab1, tab2, tab3, tab4 = st.tabs(["👥 Uživatelé", "➕ Nový uživatel", "🤒 Vložit nemoc", "✅ Schválení absencí"])
 
     with tab1:
         users = get_all_users()
@@ -920,6 +1187,64 @@ def page_admin():
                 st.warning("Vyplňte všechna povinná pole.")
 
     with tab3:
+        st.markdown("Administrátor může přímo zaznamenat nemoc zaměstnance na libovolný den či rozsah dní. Absence bude automaticky schválena.")
+        st.markdown("")
+        users = get_all_users()
+        user_options = {u["id"]: u["display_name"] for u in users}
+
+        with st.form("admin_sick_form"):
+            sick_uid = st.selectbox("Zaměstnanec", options=[u["id"] for u in users],
+                                    format_func=lambda x: user_options[x])
+            c1, c2 = st.columns(2)
+            with c1:
+                sick_from = st.date_input("Od (první den nemoci)", value=date.today())
+            with c2:
+                sick_to = st.date_input("Do (poslední den nemoci)", value=date.today())
+            sick_note = st.text_input("Poznámka (nepovinné)", placeholder="např. neschopenka, karanténa…")
+            submitted_sick = st.form_submit_button("🤒 Zaznamenat nemoc", type="primary")
+
+        if submitted_sick:
+            if sick_to < sick_from:
+                st.error("Datum 'Do' musí být stejné nebo pozdější než 'Od'.")
+            else:
+                # Insert as approved (approved=1) directly
+                with get_conn() as conn:
+                    conn.execute(
+                        "INSERT INTO absences(user_id, absence_type, date_from, date_to, note, approved) VALUES(?,?,?,?,?,1)",
+                        (sick_uid, "sickday", sick_from.isoformat(), sick_to.isoformat(), sick_note)
+                    )
+                    conn.commit()
+                emp_name = user_options[sick_uid]
+                days = (sick_to - sick_from).days + 1
+                st.success(f"Nemoc pro **{emp_name}** zaznamenána ({sick_from} – {sick_to}, {days} {'den' if days == 1 else 'dny' if days < 5 else 'dní'}) ✓")
+                st.rerun()
+
+        # Show recent admin-inserted sick days
+        st.markdown("---")
+        st.markdown("**Nedávno vložené nemoci**")
+        with get_conn() as conn:
+            recent = [dict(r) for r in conn.execute(
+                """SELECT a.*, u.display_name FROM absences a
+                   JOIN users u ON a.user_id=u.id
+                   WHERE a.absence_type='sickday' AND a.approved=1
+                   ORDER BY a.date_from DESC LIMIT 15"""
+            ).fetchall()]
+        if not recent:
+            st.info("Žádné záznamy.")
+        for r in recent:
+            note_str = f" · {r['note']}" if r.get("note") else ""
+            days = (date.fromisoformat(r["date_to"]) - date.fromisoformat(r["date_from"])).days + 1
+            day_label = f"{r['date_from']}" if days == 1 else f"{r['date_from']} – {r['date_to']}"
+            st.markdown(f"""<div class="card card-red" style="padding:14px 18px;margin-bottom:8px">
+                <strong style="color:#1a2e4a">{r['display_name']}</strong>
+                <span style="color:#c0392b"> · 🤒 Nemoc</span>
+                <span style="color:#3a5068"> · {day_label}{note_str}</span>
+            </div>""", unsafe_allow_html=True)
+            if st.button("🗑 Smazat", key=f"del_sick_{r['id']}"):
+                delete_absence(r["id"])
+                st.rerun()
+
+    with tab4:
         with get_conn() as conn:
             pending = [dict(r) for r in conn.execute(
                 """SELECT a.*, u.display_name FROM absences a
@@ -931,10 +1256,11 @@ def page_admin():
             st.info("Žádné čekající žádosti.")
         for a in pending:
             type_label = "🤒 Sickday" if a["absence_type"] == "sickday" else "🏖 Dovolená"
+            date_str = a['date_from'] if a['date_from'] == a['date_to'] else f"{a['date_from']} – {a['date_to']}"
             st.markdown(f"""<div class="card card-yellow">
-                <strong>{a['display_name']}</strong> · {type_label}<br>
-                {a['date_from']} – {a['date_to']}
-                {(' · ' + a['note']) if a.get('note') else ''}
+                <strong style="color:#1a2e4a">{a['display_name']}</strong>
+                <span style="color:#3a5068"> · {type_label} · {date_str}</span>
+                <span style="color:#7a93ab">{(' · ' + a['note']) if a.get('note') else ''}</span>
             </div>""", unsafe_allow_html=True)
             col1, col2, _ = st.columns([1, 1, 4])
             with col1:
@@ -959,11 +1285,19 @@ else:
 
     with st.sidebar:
         st.markdown(f"""
-        <div style="padding:16px 0 24px">
-            {avatar_html(user['display_name'], user['color'])}
-            <div style="margin-top:10px;font-weight:600;color:#e8eaf0">{user['display_name']}</div>
-            <div style="font-size:0.78rem;color:#6b7280">{'Administrátor' if is_admin else 'Zaměstnanec'}</div>
+        <div class="sidebar-brand">
+            <div class="brand-icon">🏛️</div>
+            <div class="brand-title">Docházkový systém</div>
+            <div class="brand-sub">Exekutorský úřad Praha 4</div>
         </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 4px 4px">
+            {avatar_html(user['display_name'], user['color'])}
+            <div>
+                <div style="font-weight:700;font-size:0.9rem;color:#1a2e4a">{user['display_name']}</div>
+                <div style="font-size:0.73rem;color:#7a93ab">{'Administrátor' if is_admin else 'Zaměstnanec'}</div>
+            </div>
+        </div>
+        <div class="sidebar-divider"></div>
         """, unsafe_allow_html=True)
 
         pages = {
