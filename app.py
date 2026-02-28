@@ -3371,3 +3371,118 @@ def inject_czech_datepicker():
 })();
 </script>
 """, height=0, scrolling=False)
+
+
+# ─────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────
+_do_backup('startup')
+start_auto_backup()
+
+init_db()
+
+# Migrace DB sloupců
+for _mig in [
+    "ALTER TABLE users ADD COLUMN email TEXT",
+    "ALTER TABLE absences ADD COLUMN email_sent INTEGER DEFAULT 0",
+    "ALTER TABLE absences ADD COLUMN half_days TEXT DEFAULT '[]'",
+    "ALTER TABLE pauses ADD COLUMN paid INTEGER DEFAULT 0",
+]:
+    with get_conn() as _mc:
+        try:
+            _mc.execute(_mig); _mc.commit()
+        except Exception:
+            pass
+
+if "user" not in st.session_state:
+    page_login()
+else:
+    user     = st.session_state.user
+    is_admin = user["role"] == "admin"
+
+    with st.sidebar:
+        st.markdown(f"""
+        <div style="padding:20px 16px 12px;border-bottom:1px solid var(--border)">
+            {logo_img_tag(white=False, height=44)}
+            <div style="font-size:.72rem;color:#94a3b8;margin-top:6px;font-weight:500">
+                Docházkov\u00fd syst\u00e9m
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        _ini = "".join(w[0].upper() for w in user["display_name"].split()[:2])
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:10px;
+                    padding:14px 16px 10px;border-bottom:1px solid var(--border)">
+            <div style="width:32px;height:32px;border-radius:16px;
+                        background:{'linear-gradient(120deg,#0b5390,#158bc8)' if is_admin else '#e0f2fe'};
+                        display:flex;align-items:center;justify-content:center;
+                        color:{'#fff' if is_admin else '#1f5e8c'};
+                        font-weight:800;font-size:13px">{_ini}</div>
+            <div>
+                <div style="font-size:.8125rem;font-weight:700;color:var(--text-dark)">{user['display_name']}</div>
+                <div style="font-size:.7rem;color:#94a3b8">{'Admin' if is_admin else user.get('role','user')}</div>
+            </div>
+        </div>
+        <div style="height:12px"></div>
+        """, unsafe_allow_html=True)
+
+        if "page" not in st.session_state:
+            st.session_state.page = "dashboard"
+
+        pages = {
+            "\U0001f4ca P\u0159ehled dne":    "dashboard",
+            "\U0001f4c5 Kalend\u00e1\u0159": "calendar",
+            "\U0001f550 Moje doch\u00e1zka":  "attendance",
+            "\U0001f3d6 Absence":              "absences",
+            "\u270f\ufe0f \u00dapravy z\u00e1znamu": "corrections",
+            "\U0001f4c8 V\u00fdkazy":         "reports",
+        }
+        if is_admin:
+            _pend = get_pending_counts()
+            _badge = f" \U0001f534 {_pend['total']}" if _pend["total"] > 0 else ""
+            pages[f"\u2699\ufe0f Spr\u00e1va{_badge}"] = "admin"
+
+        for label, key in pages.items():
+            if st.button(label, use_container_width=True,
+                         type="primary" if st.session_state.page == key else "secondary"):
+                st.session_state.page = key
+                st.rerun()
+
+        st.markdown(f"""
+        <div style="height:1px;background:var(--border);margin:8px 0 10px"></div>
+        <div style="font-size:.7rem;color:#94a3b8;text-align:center;padding:4px 0 8px">
+            CET: {cet_now().strftime('%d.%m.%Y %H:%M')}
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("\U0001f6aa Odhl\u00e1sit se", use_container_width=True):
+            del st.session_state.user
+            st.session_state.page = "dashboard"
+            st.rerun()
+
+    inject_czech_datepicker()
+
+    page = st.session_state.page
+    if page == "dashboard":
+        page_dashboard()
+    elif page == "attendance":
+        page_my_attendance()
+    elif page == "absences":
+        page_absences()
+    elif page == "corrections":
+        page_corrections()
+    elif page == "reports":
+        page_reports()
+    elif page == "calendar":
+        page_calendar()
+    elif page == "admin" and is_admin:
+        page_admin()
+
+    st.markdown(f"""
+    <div style="background:linear-gradient(120deg,#0b5390 0%,#158bc8 81%);
+                color:rgba(255,255,255,.7);font-size:.72rem;text-align:center;
+                padding:12px 20px;margin-top:40px;border-radius:12px 12px 0 0">
+        Doch\u00e1zkov\u00fd syst\u00e9m &copy; {cet_today().year}
+    </div>
+    """, unsafe_allow_html=True)
