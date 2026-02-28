@@ -2092,13 +2092,11 @@ def page_corrections():
             st.info(f"Pro {corr_date.strftime('%d.%m.%Y')} zatím neexistuje žádný záznam docházky.")
             _cin_cur = _cout_cur = ""
 
-        # ── Označit co chci změnit ────────────────────────────
+        # ── Co chci opravit ────────────────────────────────────
         st.markdown("**Co chcete opravit?**")
         _fix_cin  = st.checkbox("Opravit příchod", key="fix_cin")
         _fix_cout = st.checkbox("Opravit odchod", key="fix_cout")
-        _fix_pause = st.checkbox("Opravit / přidat pauzu", key="fix_pause")
 
-        # ── Požadované hodnoty ────────────────────────────────
         req_in = req_out = req_bs = req_be = ""
         if _fix_cin:
             req_in = st.text_input("Požadovaný příchod (HH:MM) *",
@@ -2106,21 +2104,56 @@ def page_corrections():
         if _fix_cout:
             req_out = st.text_input("Požadovaný odchod (HH:MM) *",
                                     value=_cout_cur, placeholder="15:30", key="req_out")
-        if _fix_pause:
-            _pc1, _pc2 = st.columns(2)
-            with _pc1:
-                req_bs = st.text_input("Začátek pauzy (HH:MM)", placeholder="11:30", key="req_bs")
-            with _pc2:
-                req_be = st.text_input("Konec pauzy (HH:MM)", placeholder="12:00", key="req_be")
 
-        if not (_fix_cin or _fix_cout or _fix_pause):
-            st.caption("Zaškrtněte alespoň jednu položku k opravě.")
+        # ── Pauzy: existující + přidat novou ─────────────────
+        st.markdown("**Pauzy**")
+
+        # Existující pauzy – každou lze označit k úpravě
+        _pause_edits = {}   # pause_id -> {"start": str, "end": str, "fix": bool}
+        if _corr_pauses:
+            st.caption("Označte pauzu, kterou chcete opravit, a zadejte nové časy:")
+            for _cp in _corr_pauses:
+                _cp_s = _hm_corr(_cp.get("start_time"))
+                _cp_e = _hm_corr(_cp.get("end_time")) or ""
+                _paid_tag = " 💚 placená" if _cp.get("paid") else ""
+                _fix_key  = f"fix_p_{_cp['id']}"
+                _do_fix   = st.checkbox(
+                    f"Opravit: **{_cp['pause_type']}** {_cp_s}–{_cp_e or 'probíhá'}{_paid_tag}",
+                    key=_fix_key
+                )
+                if _do_fix:
+                    _pc1, _pc2 = st.columns(2)
+                    with _pc1:
+                        _new_ps = st.text_input(f"Nový začátek (HH:MM)",
+                                                value=_cp_s, key=f"ps_{_cp['id']}")
+                    with _pc2:
+                        _new_pe = st.text_input(f"Nový konec (HH:MM)",
+                                                value=_cp_e, key=f"pe_{_cp['id']}")
+                    _pause_edits[_cp["id"]] = {
+                        "type": _cp["pause_type"], "start": _new_ps, "end": _new_pe
+                    }
+
+        # Přidat novou pauzu
+        _add_pause = st.checkbox("Přidat novou pauzu", key="add_pause_corr")
+        _new_ptype = _new_pstart = _new_pend = ""
+        if _add_pause:
+            _PTYPES_USER = ["🍽 Oběd", "☕ Přestávka", "📦 Jiné", "🏥 Lékař (placená pauza)"]
+            _np1, _np2, _np3 = st.columns(3)
+            with _np1:
+                _new_ptype  = st.selectbox("Typ pauzy", _PTYPES_USER, key="new_ptype_corr")
+            with _np2:
+                _new_pstart = st.text_input("Začátek (HH:MM)", placeholder="12:00", key="new_pstart_corr")
+            with _np3:
+                _new_pend   = st.text_input("Konec (HH:MM)", placeholder="12:30", key="new_pend_corr")
+
+        if not (_fix_cin or _fix_cout or _pause_edits or _add_pause):
+            st.caption("Zaškrtněte alespoň jednu položku k opravě nebo doplnění.")
 
         reason = st.text_area("Důvod úpravy *", placeholder="Popište důvod požadované opravy záznamu…")
 
         if st.button("Odeslat žádost o úpravu", type="primary"):
-            if not (_fix_cin or _fix_cout or _fix_pause):
-                st.error("Označte alespoň jednu položku k opravě.")
+            if not (_fix_cin or _fix_cout or _pause_edits or _add_pause):
+                st.error("Označte alespoň jednu položku.")
             elif _fix_cin and not req_in:
                 st.error("Zadejte požadovaný příchod.")
             elif _fix_cout and not req_out:
@@ -2128,13 +2161,32 @@ def page_corrections():
             elif not reason.strip():
                 st.error("Vyplňte důvod úpravy.")
             else:
-                # Sestavit popisy pro pole (prázdné = beze změny)
-                _orig_in  = _cin_cur or ""
-                _orig_out = _cout_cur or ""
+                # Sestavit textový popis pauzy pro pole reason + req_bs/req_be
+                _pause_desc_parts = []
+                for _pid, _pe in _pause_edits.items():
+                    _pause_desc_parts.append(
+                        f"Oprava pauzy {_pe['type']}: {_pe['start']}–{_pe['end']}"
+                    )
+                if _add_pause and _new_pstart:
+                    _pause_desc_parts.append(
+                        f"Nová pauza {_new_ptype}: {_new_pstart}–{_new_pend}"
+                    )
+                    req_bs = _new_pstart
+                    req_be = _new_pend
+                elif _pause_edits:
+                    _first = next(iter(_pause_edits.values()))
+                    req_bs = _first["start"]
+                    req_be = _first["end"]
+
+                _full_reason = reason.strip()
+                if _pause_desc_parts:
+                    _full_reason += "\n\nPauzy: " + "; ".join(_pause_desc_parts)
+
                 request_correction(
                     user["id"], corr_date.isoformat(),
-                    _orig_in, _orig_out, "", "",
-                    req_in or _orig_in, req_out or _orig_out, req_bs, req_be, reason
+                    _cin_cur or "", _cout_cur or "", "", "",
+                    req_in or _cin_cur or "", req_out or _cout_cur or "",
+                    req_bs, req_be, _full_reason
                 )
                 st.success("✅ Žádost odeslána – administrátor ji brzy vyřídí.")
                 st.rerun()
@@ -2236,6 +2288,38 @@ def page_reports():
                         df2 = df2[["date","checkin","checkout","Odpracováno","Typ"]].rename(
                             columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
                         df2.to_excel(writer, sheet_name=tu["display_name"][:31], index=False)
+                    # Pauzy – samostatný list
+                    with get_conn() as _pc:
+                        _mp = [dict(r) for r in _pc.execute(
+                            """SELECT p.*, a.date FROM pauses p
+                               JOIN attendance a ON p.attendance_id=a.id
+                               WHERE a.user_id=? AND strftime('%Y',a.date)=?
+                               AND strftime('%m',a.date)=? ORDER BY a.date,p.start_time""",
+                            (tu["id"], str(year), f"{month:02d}")
+                        ).fetchall()]
+                    if _mp:
+                        def _hm(v):
+                            if not v: return ""
+                            v = str(v); v = v.split(" ")[1] if " " in v else v
+                            return v[:5]
+                        def _dur(p):
+                            if not p.get("end_time"): return ""
+                            try:
+                                s = time_to_seconds(p["start_time"])
+                                e = time_to_seconds(p["end_time"])
+                                d = e - s if e >= s else e - s + 86400
+                                return seconds_to_hm(d)
+                            except: return ""
+                        _pause_rows = [{
+                            "Datum":    r["date"],
+                            "Typ":      r["pause_type"],
+                            "Začátek":  _hm(r["start_time"]),
+                            "Konec":    _hm(r.get("end_time")),
+                            "Trvání":   _dur(r),
+                            "Placená":  "Ano" if r.get("paid") else "Ne",
+                        } for r in _mp]
+                        _sheet = (tu["display_name"][:20] + "_pauzy")[:31]
+                        pd.DataFrame(_pause_rows).to_excel(writer, sheet_name=_sheet, index=False)
             xlsx_buf.seek(0)
         except ImportError:
             pass
@@ -3233,91 +3317,41 @@ def page_calendar():
 
 
 
+
 def inject_czech_datepicker():
-    # ── Krok 1: CSS přes st.markdown ────────────────────────────────────────
-    # <style> vložený přes dangerouslySetInnerHTML platí pro celý dokument
-    # včetně Base-Web portálu (overlay), který se renderuje přímo pod <body>.
-    # Každý nth-child dostane explicitní order → neděle (1.) jde na místo 7.
+    # CSS: zajistí flex layout na řádcích (nutné pro appendChild přesunutí)
     st.markdown("""<style>
-/* ===== CZECH CALENDAR – pořadí dní ===== */
 [aria-label="Calendar."] [role="row"],
 [data-baseweb="calendar"] [role="row"],
 [data-baseweb="datepicker"] [role="row"] {
   display: flex !important;
   flex-wrap: nowrap !important;
 }
-[aria-label="Calendar."] [role="row"] > *:nth-child(1),
-[data-baseweb="calendar"] [role="row"] > *:nth-child(1),
-[data-baseweb="datepicker"] [role="row"] > *:nth-child(1) { order:7!important; }
-[aria-label="Calendar."] [role="row"] > *:nth-child(2),
-[data-baseweb="calendar"] [role="row"] > *:nth-child(2),
-[data-baseweb="datepicker"] [role="row"] > *:nth-child(2) { order:1!important; }
-[aria-label="Calendar."] [role="row"] > *:nth-child(3),
-[data-baseweb="calendar"] [role="row"] > *:nth-child(3),
-[data-baseweb="datepicker"] [role="row"] > *:nth-child(3) { order:2!important; }
-[aria-label="Calendar."] [role="row"] > *:nth-child(4),
-[data-baseweb="calendar"] [role="row"] > *:nth-child(4),
-[data-baseweb="datepicker"] [role="row"] > *:nth-child(4) { order:3!important; }
-[aria-label="Calendar."] [role="row"] > *:nth-child(5),
-[data-baseweb="calendar"] [role="row"] > *:nth-child(5),
-[data-baseweb="datepicker"] [role="row"] > *:nth-child(5) { order:4!important; }
-[aria-label="Calendar."] [role="row"] > *:nth-child(6),
-[data-baseweb="calendar"] [role="row"] > *:nth-child(6),
-[data-baseweb="datepicker"] [role="row"] > *:nth-child(6) { order:5!important; }
-[aria-label="Calendar."] [role="row"] > *:nth-child(7),
-[data-baseweb="calendar"] [role="row"] > *:nth-child(7),
-[data-baseweb="datepicker"] [role="row"] > *:nth-child(7) { order:6!important; }
 </style>""", unsafe_allow_html=True)
 
-    # ── Krok 2: JS překlad + záloha CSS přes window.parent ──────────────────
     _components.html("""
 <script>
 (function(){
-  /* === Přistup k rodičovskému dokumentu === */
+  /* Přístup k parent dokumentu */
   var P = null;
   try { P = window.parent.document; } catch(e){}
   if(!P){ try { P = window.top.document; } catch(e){} }
   if(!P) return;
 
-  /* === Záloha CSS: vložíme <style> přímo do <head> parent dokumentu === */
-  if(!P.getElementById('cz-datepicker-style')){
+  /* Záloha CSS přes parent head */
+  if(!P.getElementById('cz-cal-flex')){
     var s = P.createElement('style');
-    s.id = 'cz-datepicker-style';
-    s.textContent = [
-      '[aria-label="Calendar."] [role="row"],',
-      '[data-baseweb="calendar"] [role="row"],',
-      '[data-baseweb="datepicker"] [role="row"]',
-      '{display:flex!important;flex-wrap:nowrap!important}',
-      '[aria-label="Calendar."] [role="row"]>*:nth-child(1),',
-      '[data-baseweb="calendar"] [role="row"]>*:nth-child(1)',
-      '{order:7!important}',
-      '[aria-label="Calendar."] [role="row"]>*:nth-child(2),',
-      '[data-baseweb="calendar"] [role="row"]>*:nth-child(2)',
-      '{order:1!important}',
-      '[aria-label="Calendar."] [role="row"]>*:nth-child(3),',
-      '[data-baseweb="calendar"] [role="row"]>*:nth-child(3)',
-      '{order:2!important}',
-      '[aria-label="Calendar."] [role="row"]>*:nth-child(4),',
-      '[data-baseweb="calendar"] [role="row"]>*:nth-child(4)',
-      '{order:3!important}',
-      '[aria-label="Calendar."] [role="row"]>*:nth-child(5),',
-      '[data-baseweb="calendar"] [role="row"]>*:nth-child(5)',
-      '{order:4!important}',
-      '[aria-label="Calendar."] [role="row"]>*:nth-child(6),',
-      '[data-baseweb="calendar"] [role="row"]>*:nth-child(6)',
-      '{order:5!important}',
-      '[aria-label="Calendar."] [role="row"]>*:nth-child(7),',
-      '[data-baseweb="calendar"] [role="row"]>*:nth-child(7)',
-      '{order:6!important}'
-    ].join('');
+    s.id = 'cz-cal-flex';
+    s.textContent =
+      '[aria-label="Calendar."] [role="row"],' +
+      '[data-baseweb="calendar"] [role="row"],' +
+      '[data-baseweb="datepicker"] [role="row"]' +
+      '{display:flex!important;flex-wrap:nowrap!important}';
     P.head.appendChild(s);
   }
 
-  /* === Slovníky překladu === */
-  var DAY = {
-    'Su':'Ne','Mo':'Po','Tu':'\u00dat','We':'St',
-    'Th':'\u010ct','Fr':'P\u00e1','Sa':'So'
-  };
+  /* Překlady */
+  var DAY = {'Su':'Ne','Mo':'Po','Tu':'\u00dat','We':'St','Th':'\u010ct','Fr':'P\u00e1','Sa':'So'};
   var MON = {
     'January':'Leden','February':'\u00danor','March':'B\u0159ezen',
     'April':'Duben','May':'Kv\u011bten','June':'\u010cerven',
@@ -3325,49 +3359,71 @@ def inject_czech_datepicker():
     'October':'\u0158\u00edjen','November':'Listopad','December':'Prosinec'
   };
 
-  /* === Překlad jednoho elementu === */
-  function tr(el){
+  function xlate(el){
     if(!el) return;
-    /* Projdi všechny text nodes uvnitř elementu */
-    var walker = P.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
-    var node;
-    while((node = walker.nextNode())){
-      var t = node.nodeValue.trim();
+    var walker = P.createTreeWalker(el, 4 /*NodeFilter.SHOW_TEXT*/, null, false);
+    var n;
+    while((n = walker.nextNode())){
+      var t = n.nodeValue.trim();
       if(!t) continue;
-      /* Zkratky dní */
-      if(DAY[t]){ node.nodeValue = DAY[t]; continue; }
-      /* Jméno měsíce (může být "February 2026") */
+      if(DAY[t]){ n.nodeValue = DAY[t]; continue; }
       for(var k in MON){
-        if(t.indexOf(k) !== -1){
-          node.nodeValue = node.nodeValue.replace(k, MON[k]);
-          break;
-        }
+        if(t.indexOf(k)!==-1){ n.nodeValue = n.nodeValue.replace(k, MON[k]); break; }
       }
     }
   }
 
-  /* === Patch: najdi všechny kalendáře a přelož === */
+  /* Fyzicky přesuň neděli (1. buňka) na konec každého řádku */
+  function reorder(cal){
+    var rows = cal.querySelectorAll('[role="row"]');
+    rows.forEach(function(row){
+      /* Najdi přímé dětské buňky */
+      var kids = [];
+      for(var i=0; i<row.children.length; i++){
+        var r = row.children[i].getAttribute('role');
+        if(r === 'columnheader' || r === 'gridcell' || r === 'presentation') {
+          kids.push(row.children[i]);
+        }
+      }
+      /* Pokud první buňka je neděle – přesuň na konec */
+      if(kids.length === 7){
+        var first = kids[0];
+        var txt = first.textContent.trim();
+        var lbl = (first.getAttribute('aria-label') || '').toLowerCase();
+        var isSun = (txt==='Su' || txt==='Ne' || lbl.startsWith('sunday'));
+        /* Zkontroluj aria-label buněk – neděle má den 0 */
+        if(!isSun && first.getAttribute('aria-label')){
+          /* Datum v aria-label: "Sunday, March 2, 2025" */
+          isSun = lbl.indexOf('sunday')===0;
+        }
+        /* Alternativa: první buňka má data-testid nebo data-day=0 */
+        if(isSun) row.appendChild(first);
+      }
+    });
+  }
+
+  var _patched = new WeakSet ? new WeakSet() : null;
+
   function patch(){
     var cals = P.querySelectorAll(
       '[aria-label="Calendar."],' +
-      '[aria-roledescription="datepicker"],' +
       '[data-baseweb="calendar"],' +
       '[data-baseweb="datepicker"]'
     );
-    if(!cals.length) return;
-    cals.forEach(function(cal){ tr(cal); });
-    /* Dropdown s výběrem měsíce je mimo cal element */
-    P.querySelectorAll('[data-baseweb="menu"]').forEach(function(m){ tr(m); });
+    cals.forEach(function(cal){
+      xlate(cal);
+      reorder(cal);
+    });
+    P.querySelectorAll('[data-baseweb="menu"]').forEach(function(m){ xlate(m); });
   }
 
-  /* === Spuštění === */
   patch();
-  setInterval(patch, 50);
+  setInterval(patch, 80);
   new MutationObserver(function(ms){
     for(var i=0;i<ms.length;i++){
-      if(ms[i].addedNodes.length){ setTimeout(patch, 0); break; }
+      if(ms[i].addedNodes.length){ setTimeout(patch,0); break; }
     }
-  }).observe(P.body, {childList:true, subtree:true});
+  }).observe(P.body,{childList:true,subtree:true});
 })();
 </script>
 """, height=0, scrolling=False)
