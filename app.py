@@ -1047,10 +1047,16 @@ def send_absence_email(to_email: str, to_name: str, absence: dict) -> bool:
 
 # ── Time helpers ──
 def time_to_seconds(t_str: str) -> int:
+    """Converts time string to seconds. Supports HH:MM:SS and YYYY-MM-DD HH:MM:SS."""
     if not t_str:
         return 0
-    parts = t_str.split(":")
-    h, m, s = int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0
+    t = t_str.strip()
+    if ' ' in t:            # "2026-02-28 09:30:00" -> "09:30:00"
+        t = t.split(' ')[1]
+    parts = t.split(":")
+    h = int(parts[0]) if parts[0].isdigit() else 0
+    m = int(parts[1]) if len(parts) > 1 else 0
+    s = int(parts[2]) if len(parts) > 2 else 0
     return h * 3600 + m * 60 + s
 
 def seconds_to_hm(seconds) -> str:
@@ -3123,108 +3129,204 @@ def page_calendar():
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+
 def inject_czech_datepicker():
-    """Czech datepicker: fyzicke preusporadani DOM + prelozeni textu."""
+    """
+    Lokalizuje Streamlit datepicker:
+      1. CSS (st.markdown) – prehodi nedeli na konec pres flexbox order; React-proof
+      2. JS (components.html, window.parent) – prelozi anglicke nazvy na ceske
+    """
+    # ── 1. CSS do hlavniho dokumentu pres st.markdown ───────
+    st.markdown("""
+<style>
+/* Vsechny radky kalendare jako flex */
+[data-baseweb="calendar"] [role="row"],
+[data-baseweb="datepicker"] [role="row"] {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+}
+/* Prvni sloupec (nedele v US kalendari) presunout na konec */
+[data-baseweb="calendar"] [role="row"] > *:first-child,
+[data-baseweb="datepicker"] [role="row"] > *:first-child {
+    order: 8 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+    # ── 2. JS preklad textu ──────────────────────────────────
     _components.html("""
 <script>
-(function() {
-    var D = window.parent ? window.parent.document : document;
+(function(){
+var P = (typeof window.parent !== 'undefined' && window.parent !== window)
+        ? window.parent.document : null;
+if (!P) return;
 
-    // ── Preklad ──────────────────────────────────────────────
-    var DAY_EN = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    var DAY_CZ = ['Ne','Po','\u00dat','St','\u010ct','P\u00e1','So'];
-    var DAY_SHORT = {'Su':'Ne','Mo':'Po','Tu':'\u00dat','We':'St','Th':'\u010ct','Fr':'P\u00e1','Sa':'So'};
-    var MON = {
-        'January':'Leden','February':'\u00danor','March':'B\u0159ezen','April':'Duben',
-        'May':'Kv\u011bten','June':'\u010cerven','July':'\u010cervenec','August':'Srpen',
-        'September':'Z\u00e1\u0159\u00ed','October':'\u0158\u00edjen','November':'Listopad','December':'Prosinec'
-    };
+var DS = {'Su':'Ne','Mo':'Po','Tu':'Út','We':'St','Th':'Čt','Fr':'Pá','Sa':'So'};
+var MN = {
+  'January':'Leden','February':'Únor','March':'Březen','April':'Duben',
+  'May':'Květen','June':'Červen','July':'červenec','August':'Srpen',
+  'September':'Září','October':'Říjen','November':'Listopad','December':'Prosinec'
+};
 
-    // ── Injekce CSS (jen jednou) ─────────────────────────────
-    if (!D.getElementById('cz-cal-css')) {
-        var st = D.createElement('style');
-        st.id = 'cz-cal-css';
-        // Vsechny row containery musi byt flex
-        st.textContent = [
-            '[data-baseweb="calendar"] [role="row"],',
-            '[data-baseweb="datepicker"] [role="row"],',
-            '[data-testid="stDateInputField"] [role="row"]',
-            '{display:flex!important;flex-wrap:nowrap!important}'
-        ].join('');
-        D.head.appendChild(st);
-    }
+function xlate(el){
+  if(!el || el.children.length) return;
+  var t=(el.textContent||'').trim();
+  if(DS[t]){el.textContent=DS[t];return;}
+  for(var k in MN){
+    if(t.indexOf(k)!==-1){el.textContent=t.replace(k,MN[k]);return;}
+  }
+}
 
-    // ── Pomocne funkce ───────────────────────────────────────
-    function translateEl(el) {
-        if (!el) return;
-        // Preloz textContent (jen leafy bez potomku)
-        if (!el.children.length) {
-            var t = el.textContent.trim();
-            if (DAY_SHORT[t]) { el.textContent = DAY_SHORT[t]; return; }
-            for (var k in MON) {
-                if (t.indexOf(k) !== -1) { el.textContent = t.split(k).join(MON[k]); return; }
-            }
-        }
-    }
+function patchAll(){
+  /* Nazvy dni (columnheader) */
+  P.querySelectorAll(
+    '[data-baseweb="calendar"] [role="columnheader"],' +
+    '[data-baseweb="datepicker"] [role="columnheader"]'
+  ).forEach(xlate);
 
-    function isSundayCell(cell) {
-        // Zjisti, zda je bunka nedele (column header nebo grid cell)
-        var t   = cell.textContent.trim();
-        var lbl = (cell.getAttribute('aria-label') || '').toLowerCase();
-        return (t === 'Su' || t === 'Ne' || lbl.indexOf('sunday') === 0);
-    }
+  /* Nadpis mesice (button/heading uvnitr kalendare) */
+  P.querySelectorAll(
+    '[data-baseweb="calendar"] button,' +
+    '[data-baseweb="calendar"] [role="heading"],' +
+    '[data-baseweb="calendar"] [aria-live],' +
+    '[data-baseweb="datepicker"] button,' +
+    '[data-baseweb="datepicker"] [role="heading"],' +
+    '[data-baseweb="datepicker"] [aria-live]'
+  ).forEach(xlate);
 
-    function reorderRow(row) {
-        var role = row.getAttribute('role');
-        if (role !== 'row' && role !== 'rowgroup') return;
-        // Ziskej prime deti, ktere jsou bunky
-        var cells = Array.prototype.slice.call(row.children).filter(function(c) {
-            var r = c.getAttribute('role');
-            return r === 'columnheader' || r === 'gridcell' || r === 'presentation';
-        });
-        if (cells.length !== 7) return;
-        if (isSundayCell(cells[0])) {
-            row.appendChild(cells[0]);  // fyzicky presun na konec
-        }
-    }
+  /* Dropdown moznosti mesice */
+  P.querySelectorAll(
+    '[data-baseweb="menu"] [role="option"],' +
+    '[data-baseweb="select"] [role="option"]'
+  ).forEach(xlate);
+}
 
-    function patch() {
-        var CAL_SEL = [
-            '[data-baseweb="calendar"]',
-            '[data-baseweb="datepicker"]',
-            '[data-testid="stDateInputField"] [data-baseweb="calendar"]',
-            '[data-testid="stDateInputField"] [data-baseweb="datepicker"]'
-        ].join(',');
+/* Rychly polling – preklad do 50 ms po kazde React re-render */
+setInterval(patchAll, 50);
 
-        var cals = D.querySelectorAll(CAL_SEL);
-        if (!cals.length) return;
+/* MutationObserver – okamzita reakce pri otevreni / zmene mesice */
+new MutationObserver(function(ms){
+  for(var i=0;i<ms.length;i++){
+    if(ms[i].addedNodes.length||ms[i].type==='characterData'){patchAll();break;}
+  }
+}).observe(P.body,{childList:true,subtree:true,characterData:true});
 
-        cals.forEach(function(cal) {
-            // 1. Preloz column headery (zkratky dnu)
-            cal.querySelectorAll('[role="columnheader"]').forEach(translateEl);
-
-            // 2. Preloz nadpis mesice v hlavicce
-            cal.querySelectorAll('button, [role="heading"], [aria-live]').forEach(translateEl);
-
-            // 3. Preloz dropdown moznosti mesice
-            D.querySelectorAll('[data-baseweb="menu"] [role="option"]').forEach(translateEl);
-
-            // 4. Preusporadej radky: nedele na konec
-            cal.querySelectorAll('[role="row"]').forEach(reorderRow);
-        });
-    }
-
-    // Spust okamzite + opakovane (fallback)
-    patch();
-    setInterval(patch, 250);
-
-    // Reaguj na zmeny DOM (otevreni kalendare, zmena mesice)
-    var obs = new MutationObserver(function(ms) {
-        for (var i = 0; i < ms.length; i++) {
-            if (ms[i].addedNodes.length) { patch(); break; }
-        }
-    });
-    obs.observe(D.body, {childList: true, subtree: true});
+patchAll();
 })();
 </script>
 """, height=0, scrolling=False)
+
+
+# ─────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────
+_do_backup('startup')
+start_auto_backup()
+
+init_db()
+
+# Migrace: email, paid sloupec
+for _mig in [
+    "ALTER TABLE users ADD COLUMN email TEXT",
+    "ALTER TABLE absences ADD COLUMN email_sent INTEGER DEFAULT 0",
+    "ALTER TABLE absences ADD COLUMN half_days TEXT DEFAULT '[]'",
+    "ALTER TABLE pauses ADD COLUMN paid INTEGER DEFAULT 0",
+]:
+    with get_conn() as _mc:
+        try:
+            _mc.execute(_mig); _mc.commit()
+        except Exception:
+            pass
+
+if "user" not in st.session_state:
+    page_login()
+else:
+    user     = st.session_state.user
+    is_admin = user["role"] == "admin"
+
+    with st.sidebar:
+        st.markdown(f"""
+        <div style="padding:20px 16px 12px;border-bottom:1px solid var(--border)">
+            {logo_img_tag(white=False, height=44)}
+            <div style="font-size:.72rem;color:#94a3b8;margin-top:6px;font-weight:500">
+                Docházkový systém
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        _ini = "".join(w[0].upper() for w in user["display_name"].split()[:2])
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:10px;
+                    padding:14px 16px 10px;border-bottom:1px solid var(--border)">
+            <div style="width:32px;height:32px;border-radius:16px;
+                        background:{'linear-gradient(120deg,#0b5390,#158bc8)' if is_admin else '#e0f2fe'};
+                        display:flex;align-items:center;justify-content:center;
+                        color:{'#fff' if is_admin else '#1f5e8c'};
+                        font-weight:800;font-size:13px">{_ini}</div>
+            <div>
+                <div style="font-size:.8125rem;font-weight:700;color:var(--text-dark)">{user['display_name']}</div>
+                <div style="font-size:.7rem;color:#94a3b8">{'Admin' if is_admin else user.get('role','user')}</div>
+            </div>
+        </div>
+        <div style="height:12px"></div>
+        """, unsafe_allow_html=True)
+
+        if "page" not in st.session_state:
+            st.session_state.page = "dashboard"
+
+        pages = {
+            "📊 Přehled dne":   "dashboard",
+            "📅 Kalendář":  "calendar",
+            "🕐 Moje docházka":  "attendance",
+            "🏖 Absence":             "absences",
+            "✏️ Úpravy záznamu": "corrections",
+            "📈 Výkazy":         "reports",
+        }
+        if is_admin:
+            _pend = get_pending_counts()
+            _badge = f" 🔴 {_pend['total']}" if _pend["total"] > 0 else ""
+            pages[f"⚙️ Správa{_badge}"] = "admin"
+
+        for label, key in pages.items():
+            if st.button(label, use_container_width=True,
+                         type="primary" if st.session_state.page == key else "secondary"):
+                st.session_state.page = key
+                st.rerun()
+
+        st.markdown(f"""
+        <div style="height:1px;background:var(--border);margin:8px 0 10px"></div>
+        <div style="font-size:.7rem;color:#94a3b8;text-align:center;padding:4px 0 8px">
+            CET: {cet_now().strftime("%d.%m.%Y %H:%M")}
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("🚪 Odhlásit se", use_container_width=True):
+            del st.session_state.user
+            st.session_state.page = "dashboard"
+            st.rerun()
+
+    inject_czech_datepicker()
+
+    page = st.session_state.page
+    if page == "dashboard":
+        page_dashboard()
+    elif page == "attendance":
+        page_my_attendance()
+    elif page == "absences":
+        page_absences()
+    elif page == "corrections":
+        page_corrections()
+    elif page == "reports":
+        page_reports()
+    elif page == "calendar":
+        page_calendar()
+    elif page == "admin" and is_admin:
+        page_admin()
+
+    st.markdown(f"""
+    <div style="background:linear-gradient(120deg,#0b5390 0%,#158bc8 81%);
+                color:rgba(255,255,255,.7);font-size:.72rem;text-align:center;
+                padding:12px 20px;margin-top:40px;border-radius:12px 12px 0 0">
+        Docházkový systém &copy; {cet_today().year}
+    </div>
+    """, unsafe_allow_html=True)
