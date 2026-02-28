@@ -180,6 +180,13 @@ html, body, [class*="css"] {
     transition: background .15s, color .15s !important;
     box-shadow: none !important;
 }
+/* Vnitřní p/span – Streamlit je centruje, přebijeme */
+[data-testid="stSidebar"] .stButton > button p,
+[data-testid="stSidebar"] .stButton > button span,
+[data-testid="stSidebar"] .stButton > button div {
+    text-align: left !important;
+    width: 100% !important;
+}
 [data-testid="stSidebar"] .stButton > button:hover {
     background: var(--bg) !important;
     color: var(--text-dark) !important;
@@ -1786,28 +1793,48 @@ def page_absences():
             date_to = date_from; half_days_sel = []
 
         elif abs_type == "lekar_prichod":
-            st.info("Placena pauza od **09:00 do casoveho prichodu z lekare** (9:01–15:00). Necerpa fond.")
+            st.info("Placená pauza od **09:00 do příchodu z lékaře** (příchod 9:01–15:00). Nečerpá fond.")
             _lp_c1, _lp_c2 = st.columns(2)
             with _lp_c1:
                 date_from = st.date_input("Datum", value=cet_today(), format="DD.MM.YYYY", key="lp_date")
                 date_to = date_from
             with _lp_c2:
-                _lp_time = st.time_input("Prichod z lekare v", value=time(10, 0), key="lp_time")
+                _lp_str = st.text_input("Příchod z lékaře (HH:MM)", value="10:00", placeholder="10:30",
+                                        key="lp_time_str", help="Zadejte přesný čas, např. 10:23")
             half_days_sel = []
-            if not (time(9, 1) <= _lp_time <= time(15, 0)):
-                st.warning("Cas prichodu musi byt 9:01–15:00.")
+            import re as _re_lp
+            _lp_valid = bool(_re_lp.match(r"^\d{1,2}:\d{2}$", _lp_str.strip()))
+            if _lp_valid:
+                _lp_h, _lp_m = int(_lp_str.split(":")[0]), int(_lp_str.split(":")[1])
+                _lp_time = time(_lp_h, _lp_m)
+                if not (time(9, 1) <= _lp_time <= time(15, 0)):
+                    st.warning("Čas příchodu musí být 9:01–15:00.")
+                    _lp_valid = False
+            else:
+                st.warning("Zadejte čas ve formátu HH:MM (např. 10:23).")
+                _lp_time = time(10, 0)
 
         elif abs_type == "lekar_odchod":
-            st.info("Placena pauza od **casoveho odchodu k lekari do 15:00** (odchod 9:00–14:59). Necerpa fond.")
+            st.info("Placená pauza od **odchodu k lékaři do 15:00** (odchod 9:00–14:59). Nečerpá fond.")
             _lo_c1, _lo_c2 = st.columns(2)
             with _lo_c1:
                 date_from = st.date_input("Datum", value=cet_today(), format="DD.MM.YYYY", key="lo_date")
                 date_to = date_from
             with _lo_c2:
-                _lo_time = st.time_input("Odchod k lekari v", value=time(11, 0), key="lo_time")
+                _lo_str = st.text_input("Odchod k lékaři (HH:MM)", value="11:00", placeholder="11:15",
+                                        key="lo_time_str", help="Zadejte přesný čas, např. 11:07")
             half_days_sel = []
-            if not (time(9, 0) <= _lo_time <= time(14, 59)):
-                st.warning("Cas odchodu musi byt 9:00–14:59.")
+            import re as _re_lo
+            _lo_valid = bool(_re_lo.match(r"^\d{1,2}:\d{2}$", _lo_str.strip()))
+            if _lo_valid:
+                _lo_h, _lo_m = int(_lo_str.split(":")[0]), int(_lo_str.split(":")[1])
+                _lo_time = time(_lo_h, _lo_m)
+                if not (time(9, 0) <= _lo_time <= time(14, 59)):
+                    st.warning("Čas odchodu musí být 9:00–14:59.")
+                    _lo_valid = False
+            else:
+                st.warning("Zadejte čas ve formátu HH:MM (např. 11:07).")
+                _lo_time = time(11, 0)
 
         else:  # vacation
             if summ["vacation_remain"] <= 0:
@@ -1865,8 +1892,8 @@ def page_absences():
             if abs_type not in ("nemoc","sickday","lekar_den","lekar_prichod","lekar_odchod") and date_to < date_from:
                 st.error("Datum Do musi byt stejne nebo pozdejsi nez Od.")
             elif abs_type == "lekar_prichod":
-                if not (time(9,1) <= _lp_time <= time(15,0)):
-                    st.error("Cas prichodu musi byt 9:01–15:00.")
+                if not _lp_valid or not (time(9,1) <= _lp_time <= time(15,0)):
+                    st.error("Čas příchodu musí být 9:01–15:00 ve formátu HH:MM.")
                 else:
                     _lpi = date_from.isoformat()
                     _lps = _lpi + " 09:00:00"
@@ -1889,8 +1916,8 @@ def page_absences():
                     st.success(f"Lekar 09:00 – {_lp_time.strftime('%H:%M')} zaznamenan ({date_from.strftime('%d.%m.%Y')}) ✓")
                     st.rerun()
             elif abs_type == "lekar_odchod":
-                if not (time(9,0) <= _lo_time <= time(14,59)):
-                    st.error("Cas odchodu musi byt 9:00–14:59.")
+                if not _lo_valid or not (time(9,0) <= _lo_time <= time(14,59)):
+                    st.error("Čas odchodu musí být 9:00–14:59 ve formátu HH:MM.")
                 else:
                     _loi = date_from.isoformat()
                     _los = _loi + " " + _lo_time.strftime("%H:%M:%S")
@@ -2029,31 +2056,87 @@ def page_corrections():
     tab1, tab2 = st.tabs(["➕ Nová žádost o úpravu", "📋 Moje žádosti"])
 
     with tab1:
-        st.markdown("Vyplňte datum a požadované časy. Administrátor žádost schválí nebo zamítne.")
+        st.markdown("Vyberte den, zkontrolujte stávající záznamy a zadejte požadovanou opravu. Administrátor ji schválí.")
         corr_date = st.date_input("Datum záznamu", value=cet_today(),
                                    min_value=cet_today() - timedelta(days=60), format="DD.MM.YYYY")
 
-        st.markdown("**Požadované časy** \\*")
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            req_in  = st.text_input("Příchod *", placeholder="07:45", key="req_in")
-            req_bs  = st.text_input("Začátek pauzy", placeholder="11:30", key="req_bs")
-        with rc2:
-            req_out = st.text_input("Odchod *", placeholder="15:30", key="req_out")
-            req_be  = st.text_input("Konec pauzy", placeholder="12:00", key="req_be")
+        # ── Zobrazit stávající záznamy zvoleného dne ──────────
+        _corr_att = get_attendance(user["id"], corr_date.isoformat())
+        _corr_att = dict(_corr_att) if _corr_att else {}
+        _corr_pauses = get_pauses(_corr_att["id"]) if _corr_att else []
+
+        def _hm_corr(raw):
+            if not raw: return ""
+            s = str(raw); s = s.split(" ")[1] if " " in s else s
+            return s[:5]
+
+        if _corr_att:
+            _cin_cur  = _hm_corr(_corr_att.get("checkin_time"))
+            _cout_cur = _hm_corr(_corr_att.get("checkout_time"))
+            _pause_lines = []
+            for _cp in _corr_pauses:
+                _pe = _hm_corr(_cp.get("end_time")) or "probíhá"
+                _paid_tag = " 💚" if _cp.get("paid") else ""
+                _pause_lines.append(f"**{_cp['pause_type']}** {_hm_corr(_cp['start_time'])}–{_pe}{_paid_tag}")
+            _pause_str = " · ".join(_pause_lines) if _pause_lines else "žádné pauzy"
+            st.markdown(
+                f"<div style='background:#f0fdf4;border-left:4px solid #16a34a;border-radius:8px;"
+                f"padding:10px 14px;margin:8px 0 14px;font-size:13px'>"
+                f"<strong>Stávající záznam {corr_date.strftime('%d.%m.%Y')}:</strong><br>"
+                f"📥 Příchod: <strong>{_cin_cur or '—'}</strong> &nbsp;|&nbsp; "
+                f"📤 Odchod: <strong>{_cout_cur or '—'}</strong><br>"
+                f"⏸ Pauzy: {_pause_str}"
+                f"</div>", unsafe_allow_html=True
+            )
+        else:
+            st.info(f"Pro {corr_date.strftime('%d.%m.%Y')} zatím neexistuje žádný záznam docházky.")
+            _cin_cur = _cout_cur = ""
+
+        # ── Označit co chci změnit ────────────────────────────
+        st.markdown("**Co chcete opravit?**")
+        _fix_cin  = st.checkbox("Opravit příchod", key="fix_cin")
+        _fix_cout = st.checkbox("Opravit odchod", key="fix_cout")
+        _fix_pause = st.checkbox("Opravit / přidat pauzu", key="fix_pause")
+
+        # ── Požadované hodnoty ────────────────────────────────
+        req_in = req_out = req_bs = req_be = ""
+        if _fix_cin:
+            req_in = st.text_input("Požadovaný příchod (HH:MM) *",
+                                   value=_cin_cur, placeholder="07:45", key="req_in")
+        if _fix_cout:
+            req_out = st.text_input("Požadovaný odchod (HH:MM) *",
+                                    value=_cout_cur, placeholder="15:30", key="req_out")
+        if _fix_pause:
+            _pc1, _pc2 = st.columns(2)
+            with _pc1:
+                req_bs = st.text_input("Začátek pauzy (HH:MM)", placeholder="11:30", key="req_bs")
+            with _pc2:
+                req_be = st.text_input("Konec pauzy (HH:MM)", placeholder="12:00", key="req_be")
+
+        if not (_fix_cin or _fix_cout or _fix_pause):
+            st.caption("Zaškrtněte alespoň jednu položku k opravě.")
 
         reason = st.text_area("Důvod úpravy *", placeholder="Popište důvod požadované opravy záznamu…")
 
         if st.button("Odeslat žádost o úpravu", type="primary"):
-            if not req_in or not req_out or not reason.strip():
-                st.error("Vyplňte povinná pole: Příchod, odchod a důvod.")
+            if not (_fix_cin or _fix_cout or _fix_pause):
+                st.error("Označte alespoň jednu položku k opravě.")
+            elif _fix_cin and not req_in:
+                st.error("Zadejte požadovaný příchod.")
+            elif _fix_cout and not req_out:
+                st.error("Zadejte požadovaný odchod.")
+            elif not reason.strip():
+                st.error("Vyplňte důvod úpravy.")
             else:
+                # Sestavit popisy pro pole (prázdné = beze změny)
+                _orig_in  = _cin_cur or ""
+                _orig_out = _cout_cur or ""
                 request_correction(
                     user["id"], corr_date.isoformat(),
-                    "", "", "", "",
-                    req_in, req_out, req_bs, req_be, reason
+                    _orig_in, _orig_out, "", "",
+                    req_in or _orig_in, req_out or _orig_out, req_bs, req_be, reason
                 )
-                st.success("Žádost odeslána – administrátor ji brzy vyřídí ✓")
+                st.success("✅ Žádost odeslána – administrátor ji brzy vyřídí.")
                 st.rerun()
 
     with tab2:
@@ -2661,12 +2744,20 @@ def page_admin():
 
         # ── Formulář příchod / odchod ──────────────────────────
         st.markdown("**Příchod a odchod**")
+        def _extract_hm(raw):
+            if not raw: return ""
+            s = str(raw)
+            if " " in s: s = s.split(" ")[1]
+            return s[:5]
+
         _fc1, _fc2 = st.columns(2)
         with _fc1:
-            _new_in  = st.text_input("Příchod (HH:MM)", value=_att_dict.get("checkin_time", "") or "",
+            _new_in  = st.text_input("Příchod (HH:MM)",
+                                     value=_extract_hm(_att_dict.get("checkin_time")),
                                      placeholder="07:30", key="edit_att_in")
         with _fc2:
-            _new_out = st.text_input("Odchod (HH:MM)", value=_att_dict.get("checkout_time", "") or "",
+            _new_out = st.text_input("Odchod (HH:MM)",
+                                     value=_extract_hm(_att_dict.get("checkout_time")),
                                      placeholder="16:00", key="edit_att_out")
 
         _edit_note = st.text_input("Poznámka k úpravě (interní)", key="edit_att_note", placeholder="Oprava záznamu, zapomenutý příchod…")
@@ -2737,22 +2828,32 @@ def page_admin():
 
             # Přidat novou pauzu
             with st.expander("➕ Přidat pauzu"):
+                _ALL_PAUSE_ADMIN = ["🍽 Oběd", "☕ Přestávka", "📦 Jiné", "🏥 Lékař (placená pauza)"]
                 _pp1, _pp2, _pp3 = st.columns(3)
                 with _pp1:
-                    _p_type = st.selectbox("Typ", ["oběd", "přestávka", "jiné"], key="new_pause_type")
+                    _p_type = st.selectbox("Typ pauzy", _ALL_PAUSE_ADMIN, key="new_pause_type")
                 with _pp2:
                     _p_start = st.text_input("Začátek (HH:MM)", placeholder="12:00", key="new_pause_start")
                 with _pp3:
                     _p_end   = st.text_input("Konec (HH:MM)", placeholder="12:30", key="new_pause_end")
+                _is_paid_adm = _p_type == "🏥 Lékař (placená pauza)"
+                if _is_paid_adm:
+                    st.caption("💚 Placená pauza – nezmenšuje odpracovaný fond.")
                 if st.button("Přidat pauzu", key="add_pause_btn"):
                     if _valid_time(_p_start) and _p_start.strip():
-                        _ps = _sel_day.isoformat() + " " + _p_start.strip()
-                        _pe = (_sel_day.isoformat() + " " + _p_end.strip()) if _p_end.strip() else None
-                        admin_set_pause(_att["id"], _p_type, _ps, _pe)
+                        _ps = _sel_day.isoformat() + " " + _p_start.strip() + ":00"
+                        _pe = (_sel_day.isoformat() + " " + _p_end.strip() + ":00") if _p_end.strip() else None
+                        with get_conn() as _apc:
+                            _apc.execute(
+                                "INSERT INTO pauses(attendance_id,pause_type,start_time,end_time,paid)"
+                                " VALUES(?,?,?,?,?)",
+                                (_att["id"], _p_type, _ps, _pe, 1 if _is_paid_adm else 0)
+                            )
+                            _apc.commit()
                         st.success("Pauza přidána ✓")
                         st.rerun()
                     else:
-                        st.error("Zadejte platný čas začátku.")
+                        st.error("Zadejte platný čas začátku (HH:MM).")
 
         # ── Smazání celého záznamu ─────────────────────────────
         if _att:
@@ -3130,203 +3231,143 @@ def page_calendar():
 
 
 
+
+
 def inject_czech_datepicker():
-    """
-    Lokalizuje Streamlit datepicker:
-      1. CSS (st.markdown) – prehodi nedeli na konec pres flexbox order; React-proof
-      2. JS (components.html, window.parent) – prelozi anglicke nazvy na ceske
-    """
-    # ── 1. CSS do hlavniho dokumentu pres st.markdown ───────
-    st.markdown("""
-<style>
-/* Vsechny radky kalendare jako flex */
+    # ── Krok 1: CSS přes st.markdown ────────────────────────────────────────
+    # <style> vložený přes dangerouslySetInnerHTML platí pro celý dokument
+    # včetně Base-Web portálu (overlay), který se renderuje přímo pod <body>.
+    # Každý nth-child dostane explicitní order → neděle (1.) jde na místo 7.
+    st.markdown("""<style>
+/* ===== CZECH CALENDAR – pořadí dní ===== */
+[aria-label="Calendar."] [role="row"],
 [data-baseweb="calendar"] [role="row"],
 [data-baseweb="datepicker"] [role="row"] {
-    display: flex !important;
-    flex-wrap: nowrap !important;
+  display: flex !important;
+  flex-wrap: nowrap !important;
 }
-/* Prvni sloupec (nedele v US kalendari) presunout na konec */
-[data-baseweb="calendar"] [role="row"] > *:first-child,
-[data-baseweb="datepicker"] [role="row"] > *:first-child {
-    order: 8 !important;
-}
-</style>
-""", unsafe_allow_html=True)
+[aria-label="Calendar."] [role="row"] > *:nth-child(1),
+[data-baseweb="calendar"] [role="row"] > *:nth-child(1),
+[data-baseweb="datepicker"] [role="row"] > *:nth-child(1) { order:7!important; }
+[aria-label="Calendar."] [role="row"] > *:nth-child(2),
+[data-baseweb="calendar"] [role="row"] > *:nth-child(2),
+[data-baseweb="datepicker"] [role="row"] > *:nth-child(2) { order:1!important; }
+[aria-label="Calendar."] [role="row"] > *:nth-child(3),
+[data-baseweb="calendar"] [role="row"] > *:nth-child(3),
+[data-baseweb="datepicker"] [role="row"] > *:nth-child(3) { order:2!important; }
+[aria-label="Calendar."] [role="row"] > *:nth-child(4),
+[data-baseweb="calendar"] [role="row"] > *:nth-child(4),
+[data-baseweb="datepicker"] [role="row"] > *:nth-child(4) { order:3!important; }
+[aria-label="Calendar."] [role="row"] > *:nth-child(5),
+[data-baseweb="calendar"] [role="row"] > *:nth-child(5),
+[data-baseweb="datepicker"] [role="row"] > *:nth-child(5) { order:4!important; }
+[aria-label="Calendar."] [role="row"] > *:nth-child(6),
+[data-baseweb="calendar"] [role="row"] > *:nth-child(6),
+[data-baseweb="datepicker"] [role="row"] > *:nth-child(6) { order:5!important; }
+[aria-label="Calendar."] [role="row"] > *:nth-child(7),
+[data-baseweb="calendar"] [role="row"] > *:nth-child(7),
+[data-baseweb="datepicker"] [role="row"] > *:nth-child(7) { order:6!important; }
+</style>""", unsafe_allow_html=True)
 
-    # ── 2. JS preklad textu ──────────────────────────────────
+    # ── Krok 2: JS překlad + záloha CSS přes window.parent ──────────────────
     _components.html("""
 <script>
 (function(){
-var P = (typeof window.parent !== 'undefined' && window.parent !== window)
-        ? window.parent.document : null;
-if (!P) return;
+  /* === Přistup k rodičovskému dokumentu === */
+  var P = null;
+  try { P = window.parent.document; } catch(e){}
+  if(!P){ try { P = window.top.document; } catch(e){} }
+  if(!P) return;
 
-var DS = {'Su':'Ne','Mo':'Po','Tu':'Út','We':'St','Th':'Čt','Fr':'Pá','Sa':'So'};
-var MN = {
-  'January':'Leden','February':'Únor','March':'Březen','April':'Duben',
-  'May':'Květen','June':'Červen','July':'červenec','August':'Srpen',
-  'September':'Září','October':'Říjen','November':'Listopad','December':'Prosinec'
-};
-
-function xlate(el){
-  if(!el || el.children.length) return;
-  var t=(el.textContent||'').trim();
-  if(DS[t]){el.textContent=DS[t];return;}
-  for(var k in MN){
-    if(t.indexOf(k)!==-1){el.textContent=t.replace(k,MN[k]);return;}
+  /* === Záloha CSS: vložíme <style> přímo do <head> parent dokumentu === */
+  if(!P.getElementById('cz-datepicker-style')){
+    var s = P.createElement('style');
+    s.id = 'cz-datepicker-style';
+    s.textContent = [
+      '[aria-label="Calendar."] [role="row"],',
+      '[data-baseweb="calendar"] [role="row"],',
+      '[data-baseweb="datepicker"] [role="row"]',
+      '{display:flex!important;flex-wrap:nowrap!important}',
+      '[aria-label="Calendar."] [role="row"]>*:nth-child(1),',
+      '[data-baseweb="calendar"] [role="row"]>*:nth-child(1)',
+      '{order:7!important}',
+      '[aria-label="Calendar."] [role="row"]>*:nth-child(2),',
+      '[data-baseweb="calendar"] [role="row"]>*:nth-child(2)',
+      '{order:1!important}',
+      '[aria-label="Calendar."] [role="row"]>*:nth-child(3),',
+      '[data-baseweb="calendar"] [role="row"]>*:nth-child(3)',
+      '{order:2!important}',
+      '[aria-label="Calendar."] [role="row"]>*:nth-child(4),',
+      '[data-baseweb="calendar"] [role="row"]>*:nth-child(4)',
+      '{order:3!important}',
+      '[aria-label="Calendar."] [role="row"]>*:nth-child(5),',
+      '[data-baseweb="calendar"] [role="row"]>*:nth-child(5)',
+      '{order:4!important}',
+      '[aria-label="Calendar."] [role="row"]>*:nth-child(6),',
+      '[data-baseweb="calendar"] [role="row"]>*:nth-child(6)',
+      '{order:5!important}',
+      '[aria-label="Calendar."] [role="row"]>*:nth-child(7),',
+      '[data-baseweb="calendar"] [role="row"]>*:nth-child(7)',
+      '{order:6!important}'
+    ].join('');
+    P.head.appendChild(s);
   }
-}
 
-function patchAll(){
-  /* Nazvy dni (columnheader) */
-  P.querySelectorAll(
-    '[data-baseweb="calendar"] [role="columnheader"],' +
-    '[data-baseweb="datepicker"] [role="columnheader"]'
-  ).forEach(xlate);
+  /* === Slovníky překladu === */
+  var DAY = {
+    'Su':'Ne','Mo':'Po','Tu':'\u00dat','We':'St',
+    'Th':'\u010ct','Fr':'P\u00e1','Sa':'So'
+  };
+  var MON = {
+    'January':'Leden','February':'\u00danor','March':'B\u0159ezen',
+    'April':'Duben','May':'Kv\u011bten','June':'\u010cerven',
+    'July':'\u010dervenec','August':'Srpen','September':'Z\u00e1\u0159\u00ed',
+    'October':'\u0158\u00edjen','November':'Listopad','December':'Prosinec'
+  };
 
-  /* Nadpis mesice (button/heading uvnitr kalendare) */
-  P.querySelectorAll(
-    '[data-baseweb="calendar"] button,' +
-    '[data-baseweb="calendar"] [role="heading"],' +
-    '[data-baseweb="calendar"] [aria-live],' +
-    '[data-baseweb="datepicker"] button,' +
-    '[data-baseweb="datepicker"] [role="heading"],' +
-    '[data-baseweb="datepicker"] [aria-live]'
-  ).forEach(xlate);
-
-  /* Dropdown moznosti mesice */
-  P.querySelectorAll(
-    '[data-baseweb="menu"] [role="option"],' +
-    '[data-baseweb="select"] [role="option"]'
-  ).forEach(xlate);
-}
-
-/* Rychly polling – preklad do 50 ms po kazde React re-render */
-setInterval(patchAll, 50);
-
-/* MutationObserver – okamzita reakce pri otevreni / zmene mesice */
-new MutationObserver(function(ms){
-  for(var i=0;i<ms.length;i++){
-    if(ms[i].addedNodes.length||ms[i].type==='characterData'){patchAll();break;}
+  /* === Překlad jednoho elementu === */
+  function tr(el){
+    if(!el) return;
+    /* Projdi všechny text nodes uvnitř elementu */
+    var walker = P.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    var node;
+    while((node = walker.nextNode())){
+      var t = node.nodeValue.trim();
+      if(!t) continue;
+      /* Zkratky dní */
+      if(DAY[t]){ node.nodeValue = DAY[t]; continue; }
+      /* Jméno měsíce (může být "February 2026") */
+      for(var k in MON){
+        if(t.indexOf(k) !== -1){
+          node.nodeValue = node.nodeValue.replace(k, MON[k]);
+          break;
+        }
+      }
+    }
   }
-}).observe(P.body,{childList:true,subtree:true,characterData:true});
 
-patchAll();
+  /* === Patch: najdi všechny kalendáře a přelož === */
+  function patch(){
+    var cals = P.querySelectorAll(
+      '[aria-label="Calendar."],' +
+      '[aria-roledescription="datepicker"],' +
+      '[data-baseweb="calendar"],' +
+      '[data-baseweb="datepicker"]'
+    );
+    if(!cals.length) return;
+    cals.forEach(function(cal){ tr(cal); });
+    /* Dropdown s výběrem měsíce je mimo cal element */
+    P.querySelectorAll('[data-baseweb="menu"]').forEach(function(m){ tr(m); });
+  }
+
+  /* === Spuštění === */
+  patch();
+  setInterval(patch, 50);
+  new MutationObserver(function(ms){
+    for(var i=0;i<ms.length;i++){
+      if(ms[i].addedNodes.length){ setTimeout(patch, 0); break; }
+    }
+  }).observe(P.body, {childList:true, subtree:true});
 })();
 </script>
 """, height=0, scrolling=False)
-
-
-# ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
-_do_backup('startup')
-start_auto_backup()
-
-init_db()
-
-# Migrace: email, paid sloupec
-for _mig in [
-    "ALTER TABLE users ADD COLUMN email TEXT",
-    "ALTER TABLE absences ADD COLUMN email_sent INTEGER DEFAULT 0",
-    "ALTER TABLE absences ADD COLUMN half_days TEXT DEFAULT '[]'",
-    "ALTER TABLE pauses ADD COLUMN paid INTEGER DEFAULT 0",
-]:
-    with get_conn() as _mc:
-        try:
-            _mc.execute(_mig); _mc.commit()
-        except Exception:
-            pass
-
-if "user" not in st.session_state:
-    page_login()
-else:
-    user     = st.session_state.user
-    is_admin = user["role"] == "admin"
-
-    with st.sidebar:
-        st.markdown(f"""
-        <div style="padding:20px 16px 12px;border-bottom:1px solid var(--border)">
-            {logo_img_tag(white=False, height=44)}
-            <div style="font-size:.72rem;color:#94a3b8;margin-top:6px;font-weight:500">
-                Docházkový systém
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        _ini = "".join(w[0].upper() for w in user["display_name"].split()[:2])
-        st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:10px;
-                    padding:14px 16px 10px;border-bottom:1px solid var(--border)">
-            <div style="width:32px;height:32px;border-radius:16px;
-                        background:{'linear-gradient(120deg,#0b5390,#158bc8)' if is_admin else '#e0f2fe'};
-                        display:flex;align-items:center;justify-content:center;
-                        color:{'#fff' if is_admin else '#1f5e8c'};
-                        font-weight:800;font-size:13px">{_ini}</div>
-            <div>
-                <div style="font-size:.8125rem;font-weight:700;color:var(--text-dark)">{user['display_name']}</div>
-                <div style="font-size:.7rem;color:#94a3b8">{'Admin' if is_admin else user.get('role','user')}</div>
-            </div>
-        </div>
-        <div style="height:12px"></div>
-        """, unsafe_allow_html=True)
-
-        if "page" not in st.session_state:
-            st.session_state.page = "dashboard"
-
-        pages = {
-            "📊 Přehled dne":   "dashboard",
-            "📅 Kalendář":  "calendar",
-            "🕐 Moje docházka":  "attendance",
-            "🏖 Absence":             "absences",
-            "✏️ Úpravy záznamu": "corrections",
-            "📈 Výkazy":         "reports",
-        }
-        if is_admin:
-            _pend = get_pending_counts()
-            _badge = f" 🔴 {_pend['total']}" if _pend["total"] > 0 else ""
-            pages[f"⚙️ Správa{_badge}"] = "admin"
-
-        for label, key in pages.items():
-            if st.button(label, use_container_width=True,
-                         type="primary" if st.session_state.page == key else "secondary"):
-                st.session_state.page = key
-                st.rerun()
-
-        st.markdown(f"""
-        <div style="height:1px;background:var(--border);margin:8px 0 10px"></div>
-        <div style="font-size:.7rem;color:#94a3b8;text-align:center;padding:4px 0 8px">
-            CET: {cet_now().strftime("%d.%m.%Y %H:%M")}
-        </div>
-        """, unsafe_allow_html=True)
-
-        if st.button("🚪 Odhlásit se", use_container_width=True):
-            del st.session_state.user
-            st.session_state.page = "dashboard"
-            st.rerun()
-
-    inject_czech_datepicker()
-
-    page = st.session_state.page
-    if page == "dashboard":
-        page_dashboard()
-    elif page == "attendance":
-        page_my_attendance()
-    elif page == "absences":
-        page_absences()
-    elif page == "corrections":
-        page_corrections()
-    elif page == "reports":
-        page_reports()
-    elif page == "calendar":
-        page_calendar()
-    elif page == "admin" and is_admin:
-        page_admin()
-
-    st.markdown(f"""
-    <div style="background:linear-gradient(120deg,#0b5390 0%,#158bc8 81%);
-                color:rgba(255,255,255,.7);font-size:.72rem;text-align:center;
-                padding:12px 20px;margin-top:40px;border-radius:12px 12px 0 0">
-        Docházkový systém &copy; {cet_today().year}
-    </div>
-    """, unsafe_allow_html=True)
