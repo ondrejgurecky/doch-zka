@@ -2281,45 +2281,37 @@ def page_reports():
                 df.to_excel(writer, sheet_name="Přehled", index=False)
                 for tu in target_users:
                     _s = get_month_stats(tu["id"], year, month)
-                    if _s:
-                        df2 = pd.DataFrame(_s)
-                        df2["Odpracováno"] = df2["worked_seconds"].apply(seconds_to_hm)
-                        df2["Typ"] = df2["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
-                        df2 = df2[["date","checkin","checkout","Odpracováno","Typ"]].rename(
-                            columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
-                        df2.to_excel(writer, sheet_name=tu["display_name"][:31], index=False)
-                    # Pauzy – samostatný list
-                    with get_conn() as _pc:
-                        _mp = [dict(r) for r in _pc.execute(
-                            """SELECT p.*, a.date FROM pauses p
-                               JOIN attendance a ON p.attendance_id=a.id
+                    if not _s:
+                        continue
+                    # Načti pauzy pro tento měsíc
+                    with get_conn() as _xpc:
+                        _xp_rows = [dict(r) for r in _xpc.execute(
+                            """SELECT p.pause_type, p.start_time, p.end_time, p.paid, a.date as att_date
+                               FROM pauses p JOIN attendance a ON p.attendance_id=a.id
                                WHERE a.user_id=? AND strftime('%Y',a.date)=?
-                               AND strftime('%m',a.date)=? ORDER BY a.date,p.start_time""",
+                               AND strftime('%m',a.date)=?
+                               ORDER BY a.date, p.start_time""",
                             (tu["id"], str(year), f"{month:02d}")
                         ).fetchall()]
-                    if _mp:
-                        def _hm(v):
-                            if not v: return ""
-                            v = str(v); v = v.split(" ")[1] if " " in v else v
-                            return v[:5]
-                        def _dur(p):
-                            if not p.get("end_time"): return ""
-                            try:
-                                s = time_to_seconds(p["start_time"])
-                                e = time_to_seconds(p["end_time"])
-                                d = e - s if e >= s else e - s + 86400
-                                return seconds_to_hm(d)
-                            except: return ""
-                        _pause_rows = [{
-                            "Datum":    r["date"],
-                            "Typ":      r["pause_type"],
-                            "Začátek":  _hm(r["start_time"]),
-                            "Konec":    _hm(r.get("end_time")),
-                            "Trvání":   _dur(r),
-                            "Placená":  "Ano" if r.get("paid") else "Ne",
-                        } for r in _mp]
-                        _sheet = (tu["display_name"][:20] + "_pauzy")[:31]
-                        pd.DataFrame(_pause_rows).to_excel(writer, sheet_name=_sheet, index=False)
+                    def _xhm(v):
+                        if not v: return ""
+                        v = str(v); return (v.split(" ")[1] if " " in v else v)[:5]
+                    # Seskup pauzy per datum
+                    _pb = {}
+                    for _xp in _xp_rows:
+                        _d = _xp["att_date"]
+                        _ps = _xhm(_xp["start_time"])
+                        _pe = _xhm(_xp.get("end_time")) or "?"
+                        _pt = _xp["pause_type"]
+                        _paid_tag = " 💚" if _xp.get("paid") else ""
+                        _pb.setdefault(_d, []).append(f"{_pt} {_ps}-{_pe}{_paid_tag}")
+                    df2 = pd.DataFrame(_s)
+                    df2["Odpracováno"] = df2["worked_seconds"].apply(seconds_to_hm)
+                    df2["Typ"] = df2["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
+                    df2["Pauzy"] = df2["date"].apply(lambda d: " | ".join(_pb.get(d, [])))
+                    df2 = df2[["date","checkin","checkout","Odpracováno","Pauzy","Typ"]].rename(
+                        columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
+                    df2.to_excel(writer, sheet_name=tu["display_name"][:31], index=False)
             xlsx_buf.seek(0)
         except ImportError:
             pass
@@ -3375,30 +3367,11 @@ def inject_czech_datepicker():
 
   /* Fyzicky přesuň neděli (1. buňka) na konec každého řádku */
   function reorder(cal){
-    var rows = cal.querySelectorAll('[role="row"]');
-    rows.forEach(function(row){
-      /* Najdi přímé dětské buňky */
-      var kids = [];
-      for(var i=0; i<row.children.length; i++){
-        var r = row.children[i].getAttribute('role');
-        if(r === 'columnheader' || r === 'gridcell' || r === 'presentation') {
-          kids.push(row.children[i]);
-        }
-      }
-      /* Pokud první buňka je neděle – přesuň na konec */
-      if(kids.length === 7){
-        var first = kids[0];
-        var txt = first.textContent.trim();
-        var lbl = (first.getAttribute('aria-label') || '').toLowerCase();
-        var isSun = (txt==='Su' || txt==='Ne' || lbl.startsWith('sunday'));
-        /* Zkontroluj aria-label buněk – neděle má den 0 */
-        if(!isSun && first.getAttribute('aria-label')){
-          /* Datum v aria-label: "Sunday, March 2, 2025" */
-          isSun = lbl.indexOf('sunday')===0;
-        }
-        /* Alternativa: první buňka má data-testid nebo data-day=0 */
-        if(isSun) row.appendChild(first);
-      }
+    /* US kalendář: neděle je VŽDY první sloupec (index 0).
+       Přesuneme children[0] na konec každého 7-sloupcového řádku – bez podmínek.
+       appendChild je idempotentní: pokud uzel je již poslední, nic se nestane. */
+    cal.querySelectorAll('[role="row"]').forEach(function(row){
+      if(row.children.length === 7) row.appendChild(row.children[0]);
     });
   }
 
