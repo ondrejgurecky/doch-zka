@@ -1781,27 +1781,27 @@ def page_absences():
             if summ["sickday_remain"] <= 0:
                 st.warning(f"Nemáte žádný zbývající sickday (čerpáno {summ['sickday_used']}/{summ['sickday_total']}).")
             sick_date = cz_date_input("Den", value=cet_today(),
-                                      min_value=cet_today() - timedelta(days=60), format="DD.MM.YYYY")
+                                      min_value=cet_today() - timedelta(days=60))
             date_from = date_to = sick_date
             half_days_sel = []
 
         elif abs_type == "nemoc":
             st.caption("Zadejte začátek nemoci. Konec lze doplnit v záložce 'Konec nemoci'. Nemoc nečerpá fond.")
             date_from = cz_date_input("Začátek nemoci", value=cet_today(),
-                                      min_value=cet_today() - timedelta(days=90), format="DD.MM.YYYY")
+                                      min_value=cet_today() - timedelta(days=90))
             date_to = date_from
             half_days_sel = []
 
         elif abs_type == "lekar_den":
             st.caption("Příchod 8:00, placená pauza 8:00–16:00, odchod 16:00. **Nečerpá fond.**")
-            date_from = cz_date_input("Datum", value=cet_today(), format="DD.MM.YYYY")
+            date_from = cz_date_input("Datum", value=cet_today())
             date_to = date_from; half_days_sel = []
 
         elif abs_type == "lekar_prichod":
             st.info("Placená pauza od **09:00 do příchodu z lékaře** (příchod 9:01–15:00). Nečerpá fond.")
             _lp_c1, _lp_c2 = st.columns(2)
             with _lp_c1:
-                date_from = cz_date_input("Datum", value=cet_today(), format="DD.MM.YYYY", key="lp_date")
+                date_from = cz_date_input("Datum", value=cet_today(), key="lp_date")
                 date_to = date_from
             with _lp_c2:
                 _lp_str = st.text_input("Příchod z lékaře (HH:MM)", value="10:00", placeholder="10:30",
@@ -1823,7 +1823,7 @@ def page_absences():
             st.info("Placená pauza od **odchodu k lékaři do 15:00** (odchod 9:00–14:59). Nečerpá fond.")
             _lo_c1, _lo_c2 = st.columns(2)
             with _lo_c1:
-                date_from = cz_date_input("Datum", value=cet_today(), format="DD.MM.YYYY", key="lo_date")
+                date_from = cz_date_input("Datum", value=cet_today(), key="lo_date")
                 date_to = date_from
             with _lo_c2:
                 _lo_str = st.text_input("Odchod k lékaři (HH:MM)", value="11:00", placeholder="11:15",
@@ -1846,9 +1846,9 @@ def page_absences():
                 st.warning(f"Nemáte žádnou zbývající dovolenou (čerpáno {summ['vacation_used']:.1f}/{summ['vacation_total']} dní).")
             c1, c2 = st.columns(2)
             with c1:
-                date_from = cz_date_input("Od", value=cet_today(), format="DD.MM.YYYY")
+                date_from = cz_date_input("Od", value=cet_today())
             with c2:
-                date_to = cz_date_input("Do", value=cet_today(), format="DD.MM.YYYY")
+                date_to = cz_date_input("Do", value=cet_today())
 
             half_days_sel = []
             if date_to >= date_from:
@@ -2002,8 +2002,7 @@ def page_absences():
                     "Datum ukončení nemoci",
                     value=cet_today(),
                     min_value=date.fromisoformat(a["date_from"]),
-                    key=end_key,
-                    format="DD.MM.YYYY")
+                    key=end_key)
                 if st.button("Uložit konec nemoci", key=f"btn_end_{a['id']}"):
                     update_nemoc_end(a["id"], end_date)
                     st.success(f"Konec nemoci uložen: {end_date} ✓")
@@ -2063,7 +2062,7 @@ def page_corrections():
     with tab1:
         st.markdown("Vyberte den, zkontrolujte stávající záznamy a zadejte požadovanou opravu. Administrátor ji schválí.")
         corr_date = cz_date_input("Datum záznamu", value=cet_today(),
-                                   min_value=cet_today() - timedelta(days=60), format="DD.MM.YYYY")
+                                   min_value=cet_today() - timedelta(days=60))
 
         # ── Zobrazit stávající záznamy zvoleného dne ──────────
         _corr_att = get_attendance(user["id"], corr_date.isoformat())
@@ -2572,9 +2571,9 @@ def page_admin():
                                     format_func=lambda x: uid_map[x])
             c1, c2 = st.columns(2)
             with c1:
-                sick_from = cz_date_input("Od", value=cet_today(), format="DD.MM.YYYY")
+                sick_from = cz_date_input("Od", value=cet_today())
             with c2:
-                sick_to   = cz_date_input("Do", value=cet_today(), format="DD.MM.YYYY")
+                sick_to   = cz_date_input("Do", value=cet_today())
             sick_note = st.text_input("Poznámka", placeholder="neschopenka, karanténa…")
             submitted_sick = st.form_submit_button("🤒 Zaznamenat nemoc", type="primary")
         if submitted_sick:
@@ -2883,7 +2882,7 @@ def page_admin():
             format_func=lambda x: _eu_map[x], key="edit_att_uid"
         )
         _sel_day = cz_date_input(
-            "Datum", value=cet_today(), key="edit_att_day", format="DD.MM.YYYY"
+            "Datum", value=cet_today(), key="edit_att_day"
         )
 
         # Načti existující záznam
@@ -3072,9 +3071,9 @@ def page_admin():
         )
         _vadd_c1, _vadd_c2 = st.columns(2)
         with _vadd_c1:
-            _vac_from = cz_date_input("Od", value=cet_today(), format="DD.MM.YYYY", key="vac_add_from")
+            _vac_from = cz_date_input("Od", value=cet_today(), key="vac_add_from")
         with _vadd_c2:
-            _vac_to = cz_date_input("Do", value=cet_today(), format="DD.MM.YYYY", key="vac_add_to")
+            _vac_to = cz_date_input("Do", value=cet_today(), key="vac_add_to")
 
         _vac_half_sel = []
         if _vadd_type == "vacation" and _vac_to >= _vac_from:
