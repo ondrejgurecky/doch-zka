@@ -3447,21 +3447,36 @@ def inject_czech_datepicker():
     }
   }
 
-  /* Fyzicky přesuň neděli (1. buňka) na konec každého řádku */
+  /* Přesuň neděli na konec – MUSÍ proběhnout PŘED překladem,
+     aby šlo detekovat anglické "Su" v záhlaví. */
   function reorder(cal){
-    /* US kalendář: neděle je vždy první sloupec.
-       Přesuneme children[0] na konec – ALE pouze jednou na každý řádek.
-       Řádek označíme atributem data-cz-done="1" aby se přesun
-       neopakoval při dalším volání setInterval. */
     cal.querySelectorAll('[role="row"]').forEach(function(row){
-      if(row.children.length === 7 && !row.getAttribute('data-cz-done')){
-        row.setAttribute('data-cz-done','1');
-        row.appendChild(row.children[0]);
+      if(row.getAttribute('data-cz-done')) return;
+      var first = row.children[0];
+      if(!first) return;
+      var role = first.getAttribute('role');
+
+      if(role === 'columnheader'){
+        /* Záhlaví: přesuň pouze pokud první buňka obsahuje "Su" */
+        if((first.textContent||'').trim() === 'Su'){
+          row.setAttribute('data-cz-done','1');
+          row.appendChild(first);
+        }
+      } else if(role === 'gridcell' || role === 'presentation'){
+        /* Řádky s daty: v US kalendáři je první buňka vždy neděle */
+        /* Hledáme buňky se správnou rolí (přeskočíme wrappery) */
+        var cells = [];
+        for(var i=0;i<row.children.length;i++){
+          var r2 = row.children[i].getAttribute('role');
+          if(r2==='gridcell'||r2==='presentation') cells.push(row.children[i]);
+        }
+        if(cells.length === 7){
+          row.setAttribute('data-cz-done','1');
+          row.appendChild(cells[0]);
+        }
       }
     });
   }
-
-  var _patched = new WeakSet ? new WeakSet() : null;
 
   function patch(){
     var cals = P.querySelectorAll(
@@ -3470,8 +3485,8 @@ def inject_czech_datepicker():
       '[data-baseweb="datepicker"]'
     );
     cals.forEach(function(cal){
-      xlate(cal);
-      reorder(cal);
+      reorder(cal);  /* NEJDŘÍV přesuň (detekuje anglické "Su") */
+      xlate(cal);    /* PAK přelož */
     });
     P.querySelectorAll('[data-baseweb="menu"]').forEach(function(m){ xlate(m); });
   }
