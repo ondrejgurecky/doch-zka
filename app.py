@@ -2280,10 +2280,16 @@ def page_reports():
             with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:
                 df.to_excel(writer, sheet_name="Přehled", index=False)
                 for tu in target_users:
+                    # ── Pomocné funkce ────────────────────────────────────
+                    def _xhm(v):
+                        if not v: return ""
+                        v = str(v); return (v.split(" ")[1] if " " in v else v)[:5]
+
+                    # ── Docházka indexovaná datem ─────────────────────────
                     _s = get_month_stats(tu["id"], year, month)
-                    if not _s:
-                        continue
-                    # Načti pauzy pro tento měsíc
+                    _att_by_date = {r["date"]: r for r in _s}
+
+                    # ── Pauzy indexované datem ────────────────────────────
                     with get_conn() as _xpc:
                         _xp_rows = [dict(r) for r in _xpc.execute(
                             """SELECT p.pause_type, p.start_time, p.end_time, p.paid, a.date as att_date
@@ -2293,25 +2299,101 @@ def page_reports():
                                ORDER BY a.date, p.start_time""",
                             (tu["id"], str(year), f"{month:02d}")
                         ).fetchall()]
-                    def _xhm(v):
-                        if not v: return ""
-                        v = str(v); return (v.split(" ")[1] if " " in v else v)[:5]
-                    # Seskup pauzy per datum
                     _pb = {}
                     for _xp in _xp_rows:
                         _d = _xp["att_date"]
                         _ps = _xhm(_xp["start_time"])
                         _pe = _xhm(_xp.get("end_time")) or "?"
                         _pt = _xp["pause_type"]
-                        _paid_tag = " 💚" if _xp.get("paid") else ""
+                        _paid_tag = " (pl.)" if _xp.get("paid") else ""
                         _pb.setdefault(_d, []).append(f"{_pt} {_ps}-{_pe}{_paid_tag}")
-                    df2 = pd.DataFrame(_s)
-                    df2["Odpracováno"] = df2["worked_seconds"].apply(seconds_to_hm)
-                    df2["Typ"] = df2["is_weekend"].apply(lambda x: "Víkend" if x else "Pracovní")
-                    df2["Pauzy"] = df2["date"].apply(lambda d: " | ".join(_pb.get(d, [])))
-                    df2 = df2[["date","checkin","checkout","Odpracováno","Pauzy","Typ"]].rename(
-                        columns={"date":"Datum","checkin":"Příchod","checkout":"Odchod"})
-                    df2.to_excel(writer, sheet_name=tu["display_name"][:31], index=False)
+
+                    # ── Absence indexované datem ──────────────────────────
+                    _abs_type_labels = {
+                        "vacation": "Dovolena", "vacation_half": "Dovolena (pulden)",
+                        "sickday": "Sickday", "nemoc": "Nemoc/PN",
+                        "lekar_den": "Lekar (den)", "lekar_prichod": "Lekar (prichod)",
+                        "lekar_odchod": "Lekar (odchod)",
+                    }
+                    with get_conn() as _xac:
+                        _abs_rows = [dict(r) for r in _xac.execute(
+                            """SELECT absence_type, date_from, date_to, note FROM absences
+                               WHERE user_id=? AND approved=1
+                               AND date_from <= ? AND date_to >= ?""",
+                            (tu["id"],
+                             date(year, month, 1).replace(month=month % 12 + 1, day=1).isoformat()
+                             if month < 12 else f"{year+1}-01-01",
+                             f"{year}-{month:02d}-01")
+                        ).fetchall()]
+                    _ab_by_date = {}
+                    for _ab in _abs_rows:
+                        _af = date.fromisoformat(_ab["date_from"])
+                        _at = date.fromisoformat(_ab["date_to"])
+                        _cur = _af
+                        while _cur <= _at:
+                            if _cur.year == year and _cur.month == month:
+                                _lbl = _abs_type_labels.get(_ab["absence_type"], _ab["absence_type"])
+                                _ab_by_date[_cur.isoformat()] = _lbl
+                            _cur += timedelta(days=1)
+
+                    # ── Svátky ────────────────────────────────────────────
+                    _hols = czech_holidays(year)
+                    _hol_names = {
+                        date(year,1,1):"Novy rok", date(year,5,1):"Svatek prace",
+                        date(year,5,8):"Den vitezstvi", date(year,7,5):"Cyril a Metodej",
+                        date(year,7,6):"Mistr Jan Hus", date(year,9,28):"Den ceske statnosti",
+                        date(year,10,28):"Vznik CSR", date(year,11,17):"Den svobody",
+                        date(year,12,24):"Stedry den", date(year,12,25):"1. svanek vanocni",
+                        date(year,12,26):"2. svatek vanocni",
+                    }
+                    # Velikonoce se mění – přidáme z hol_names
+                    for _h in _hols:
+                        if _h not in _hol_names:
+                            _hol_names[_h] = "Statni svatek"
+
+                    # ── Každý kalendářní den měsíce → jeden řádek ────────
+                    _num_days = (date(year, month % 12 + 1, 1) - timedelta(days=1)).day \
+                                if month < 12 else 31
+                    _DOW_CZ = ["Po","Ut","St","Ct","Pa","So","Ne"]
+                    _detail_rows = []
+                    for _dn in range(1, _num_days + 1):
+                        _d = date(year, month, _dn)
+                        _ds = _d.isoformat()
+                        _dow = _DOW_CZ[_d.weekday()]
+                        _is_wknd = _d.weekday() >= 5
+                        _is_hol  = _d in _hols
+
+                        _att = _att_by_date.get(_ds)
+                        _cin    = _xhm(_att["checkin"])  if _att else ""
+                        _cout   = _xhm(_att["checkout"]) if _att else ""
+                        _worked = seconds_to_hm(_att["worked_seconds"]) if _att else ""
+                        _pauses = " | ".join(_pb.get(_ds, []))
+                        _absence = _ab_by_date.get(_ds, "")
+
+                        # Určení stavu dne
+                        if _is_hol:
+                            _stav = f"Statn  svatek: {_hol_names.get(_d,'')}"
+                        elif _is_wknd:
+                            _stav = "Vikend"
+                        elif _absence:
+                            _stav = _absence
+                        elif _cin:
+                            _stav = "Dochazka"
+                        else:
+                            _stav = "Chybi dochazka"
+
+                        _detail_rows.append({
+                            "Datum":        _ds,
+                            "Den":          _dow,
+                            "Stav":         _stav,
+                            "Prichod":      _cin,
+                            "Odchod":       _cout,
+                            "Odpracovano":  _worked,
+                            "Pauzy":        _pauses,
+                        })
+
+                    _sheet_name = tu["display_name"][:31]
+                    pd.DataFrame(_detail_rows).to_excel(writer, sheet_name=_sheet_name, index=False)
             xlsx_buf.seek(0)
         except ImportError:
             pass
@@ -3367,11 +3449,15 @@ def inject_czech_datepicker():
 
   /* Fyzicky přesuň neděli (1. buňka) na konec každého řádku */
   function reorder(cal){
-    /* US kalendář: neděle je VŽDY první sloupec (index 0).
-       Přesuneme children[0] na konec každého 7-sloupcového řádku – bez podmínek.
-       appendChild je idempotentní: pokud uzel je již poslední, nic se nestane. */
+    /* US kalendář: neděle je vždy první sloupec.
+       Přesuneme children[0] na konec – ALE pouze jednou na každý řádek.
+       Řádek označíme atributem data-cz-done="1" aby se přesun
+       neopakoval při dalším volání setInterval. */
     cal.querySelectorAll('[role="row"]').forEach(function(row){
-      if(row.children.length === 7) row.appendChild(row.children[0]);
+      if(row.children.length === 7 && !row.getAttribute('data-cz-done')){
+        row.setAttribute('data-cz-done','1');
+        row.appendChild(row.children[0]);
+      }
     });
   }
 
