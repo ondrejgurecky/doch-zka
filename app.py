@@ -3394,14 +3394,7 @@ def page_calendar():
 
 def inject_czech_datepicker():
     # CSS: zajistí flex layout na řádcích (nutné pro appendChild přesunutí)
-    st.markdown("""<style>
-[aria-label="Calendar."] [role="row"],
-[data-baseweb="calendar"] [role="row"],
-[data-baseweb="datepicker"] [role="row"] {
-  display: flex !important;
-  flex-wrap: nowrap !important;
-}
-</style>""", unsafe_allow_html=True)
+    # Překlad kalendáře zajišťuje JS níže
 
     _components.html("""
 <script>
@@ -3411,19 +3404,6 @@ def inject_czech_datepicker():
   if(!P){ try { P = window.top.document; } catch(e){} }
   if(!P) return;
 
-  /* Flex CSS do parent head */
-  if(!P.getElementById('cz-cal-flex')){
-    var s = P.createElement('style');
-    s.id = 'cz-cal-flex';
-    s.textContent =
-      '[aria-label="Calendar."] [role="row"],' +
-      '[data-baseweb="calendar"] [role="row"],' +
-      '[data-baseweb="datepicker"] [role="row"]' +
-      '{display:flex!important;flex-wrap:nowrap!important}';
-    P.head.appendChild(s);
-  }
-
-  /* Překlady */
   var DAY = {'Su':'Ne','Mo':'Po','Tu':'Út','We':'St','Th':'Čt','Fr':'Pá','Sa':'So'};
   var MON = {
     'January':'Leden','February':'Únor','March':'Březen',
@@ -3446,63 +3426,18 @@ def inject_czech_datepicker():
     }
   }
 
-  /* Najde přímého potomka [role="row"] který je předek (nebo roven) daného elementu */
-  function directRowChild(el){
-    var cur = el;
-    while(cur){
-      var p = cur.parentNode;
-      if(!p) return null;
-      if(p.getAttribute && p.getAttribute('role')==='row') return cur;
-      cur = p;
-    }
-    return null;
-  }
-
-  function setOrders(cal){
-    /* --- ZÁHLAVÍ: projdi od columnheader nahoru na přímého potomka row --- */
-    var hdrs = Array.prototype.slice.call(
-      cal.querySelectorAll('[role="columnheader"]')
-    );
-    if(hdrs.length === 7){
-      var flexItems = hdrs.map(function(h){ return directRowChild(h) || h; });
-      /* index 0 = neděle → order 7; 1-6 → order 1-6 */
-      flexItems[0].style.setProperty('order','7','important');
-      for(var i=1;i<7;i++) flexItems[i].style.setProperty('order',String(i),'important');
-    }
-
-    /* --- DATOVÉ ŘÁDKY: přímé děti každého row --- */
-    cal.querySelectorAll('[role="row"]').forEach(function(row){
-      var ch = row.children;
-      /* Přeskočíme záhlaví (již zpracováno výše) */
-      if(ch.length === 7){
-        var hasHeader = false;
-        for(var k=0;k<ch.length;k++){
-          if(ch[k].getAttribute('role')==='columnheader'||
-             ch[k].querySelector('[role="columnheader"]')){ hasHeader=true; break; }
-        }
-        if(!hasHeader){
-          ch[0].style.setProperty('order','7','important');
-          for(var j=1;j<7;j++) ch[j].style.setProperty('order',String(j),'important');
-        }
-      }
-    });
-  }
-
   function patch(){
     var cals = P.querySelectorAll(
       '[aria-label="Calendar."],' +
       '[data-baseweb="calendar"],' +
       '[data-baseweb="datepicker"]'
     );
-    cals.forEach(function(cal){
-      setOrders(cal);
-      xlate(cal);
-    });
+    cals.forEach(function(cal){ xlate(cal); });
     P.querySelectorAll('[data-baseweb="menu"]').forEach(function(m){ xlate(m); });
   }
 
   patch();
-  setInterval(patch, 80);
+  setInterval(patch, 200);
   new MutationObserver(function(ms){
     for(var i=0;i<ms.length;i++){
       if(ms[i].addedNodes.length){ setTimeout(patch,0); break; }
