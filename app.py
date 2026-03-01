@@ -3455,14 +3455,23 @@ def inject_czech_datepicker():
 # ─────────────────────────────────────────────
 # CUSTOM DATE INPUT – česky, bez Base Web календáře
 # ─────────────────────────────────────────────
+_cz_dp_counter: dict = {}
+
 def cz_date_input(label: str, value=None, key: str = None,
                   min_value=None, max_value=None) -> "date":
     """
-    Vlastní CZ datepicker – týden začíná pondělím, česky, plnohodnotný kalendář.
+    Vlastni CZ datepicker - tyden zacina pondelim, cesky, plnohodnotny kalendar.
     """
     if value is None:
         value = cet_today()
     default_iso = value.isoformat() if hasattr(value, "isoformat") else cet_today().isoformat()
+
+    # Automaticky unikatni klic pokud neni zadan
+    if key is None:
+        _base = "cdp_" + "".join(c if c.isalnum() else "_" for c in label.lower())[:20]
+        _cz_dp_counter[_base] = _cz_dp_counter.get(_base, 0) + 1
+        key = f"{_base}_{_cz_dp_counter[_base]}"
+
     st.markdown(f"<label style='font-size:14px;font-weight:500;color:#374151'>{label}</label>",
                 unsafe_allow_html=True)
     raw = _cz_dp_component(value=default_iso, key=key, default=default_iso)
@@ -3477,7 +3486,6 @@ def cz_date_input(label: str, value=None, key: str = None,
         except Exception:
             pass
     return value if hasattr(value, "year") else cet_today()
-
 
 # ─────────────────────────────────────────────
 # MAIN
