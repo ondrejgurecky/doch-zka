@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, sans-serif; }
+  body { background: transparent; }
+
+  .dp-wrap { display: inline-block; position: relative; }
+
+  .dp-input {
+    display: flex; align-items: center; gap: 6px;
+    border: 1px solid #cbd5e1; border-radius: 8px;
+    padding: 7px 12px; cursor: pointer; background: #fff;
+    font-size: 14px; color: #1e293b; user-select: none;
+    transition: border-color .15s;
+    min-width: 150px;
+  }
+  .dp-input:hover { border-color: #94a3b8; }
+  .dp-input.open { border-color: #1d4ed8; box-shadow: 0 0 0 3px #dbeafe; }
+  .dp-icon { color: #64748b; font-size: 16px; }
+
+  .dp-popup {
+    display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 9999;
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 12px;
+    min-width: 280px;
+  }
+  .dp-popup.open { display: block; }
+
+  .dp-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .dp-nav button {
+    background: none; border: none; cursor: pointer; padding: 4px 8px;
+    border-radius: 6px; font-size: 18px; color: #475569;
+    transition: background .15s;
+  }
+  .dp-nav button:hover { background: #f1f5f9; }
+  .dp-nav-label {
+    font-weight: 700; font-size: 14px; color: #1e293b; cursor: pointer;
+    padding: 4px 8px; border-radius: 6px; transition: background .15s;
+  }
+  .dp-nav-label:hover { background: #f1f5f9; }
+
+  .dp-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 2px; }
+  .dp-dow {
+    text-align: center; font-size: 11px; font-weight: 700;
+    color: #94a3b8; padding: 4px 0 6px;
+  }
+  .dp-dow.weekend { color: #f87171; }
+
+  .dp-day {
+    text-align: center; padding: 6px 2px; border-radius: 6px;
+    font-size: 13px; cursor: pointer; color: #1e293b;
+    transition: background .1s, color .1s;
+    line-height: 1.2;
+  }
+  .dp-day:hover { background: #e0f2fe; }
+  .dp-day.today { font-weight: 800; color: #1d4ed8; }
+  .dp-day.selected { background: #1d4ed8 !important; color: #fff !important; border-radius: 6px; }
+  .dp-day.other-month { color: #cbd5e1; }
+  .dp-day.weekend { color: #ef4444; }
+  .dp-day.weekend.selected { color: #fff; }
+  .dp-day.holiday { background: #fef9c3; }
+  .dp-day.empty { cursor: default; }
+
+  /* Výběr roku/měsíce */
+  .dp-ym-grid {
+    display: grid; grid-template-columns: repeat(3,1fr); gap: 4px;
+  }
+  .dp-ym-item {
+    text-align: center; padding: 8px 4px; border-radius: 6px;
+    font-size: 13px; cursor: pointer; color: #1e293b;
+    transition: background .1s;
+  }
+  .dp-ym-item:hover { background: #e0f2fe; }
+  .dp-ym-item.selected { background: #1d4ed8; color: #fff; }
+  .dp-ym-item.current { font-weight: 700; }
+
+  .dp-year-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .dp-year-nav button {
+    background: none; border: none; cursor: pointer; padding: 4px 8px;
+    border-radius: 6px; font-size: 16px; color: #475569;
+  }
+  .dp-year-nav button:hover { background: #f1f5f9; }
+  .dp-year-range {
+    font-weight: 700; font-size: 13px; color: #1e293b;
+  }
+</style>
+</head>
+<body>
+<div class="dp-wrap">
+  <div class="dp-input" id="dpInput">
+    <span class="dp-icon">📅</span>
+    <span id="dpDisplay">Vyberte datum</span>
+  </div>
+  <div class="dp-popup" id="dpPopup">
+    <div id="dpCalBody"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var Streamlit = window.Streamlit || (parent && parent.Streamlit);
+
+  // ── Komunikace se Streamlit ──────────────────────────────
+  function sendValue(val){
+    if(window.Streamlit){
+      window.Streamlit.setComponentValue(val);
+    } else {
+      // fallback: postMessage
+      window.parent.postMessage({type:'streamlit:setComponentValue', value:val}, '*');
+    }
+  }
+
+  // ── Lokalizace ───────────────────────────────────────────
+  var MONTHS = ['Leden','Únor','Březen','Duben','Květen','Červen',
+                'Červenec','Srpen','Září','Říjen','Listopad','Prosinec'];
+  var MONTHS_SHORT = ['Led','Úno','Bře','Dub','Kvě','Čer',
+                      'Čvc','Srp','Zář','Říj','Lis','Pro'];
+  var DAYS = ['Po','Út','St','Čt','Pá','So','Ne'];
+
+  // ── Stav ────────────────────────────────────────────────
+  var today = new Date();
+  today.setHours(0,0,0,0);
+
+  var sel   = null;   // vybrané datum (Date nebo null)
+  var view  = { y: today.getFullYear(), m: today.getMonth() }; // zobrazený měsíc
+  var mode  = 'days'; // 'days' | 'months' | 'years'
+  var yearBase = Math.floor(today.getFullYear() / 12) * 12;
+  var open  = false;
+
+  // ── Přečti args od Streamlit ────────────────────────────
+  function applyArgs(args){
+    if(!args) return;
+    if(args.value){
+      var d = new Date(args.value + 'T00:00:00');
+      if(!isNaN(d)) {
+        sel = d;
+        view.y = d.getFullYear();
+        view.m = d.getMonth();
+        yearBase = Math.floor(d.getFullYear()/12)*12;
+      }
+    }
+    renderInput();
+  }
+
+  // ── Svátky ČR (pevné) ───────────────────────────────────
+  function isHoliday(d){
+    var k = (d.getMonth()+1)+'-'+d.getDate();
+    return ['1-1','5-1','5-8','7-5','7-6','9-28','10-28','11-17','12-24','12-25','12-26'].indexOf(k) >= 0;
+  }
+
+  // ── Formát ──────────────────────────────────────────────
+  function fmt(d){
+    if(!d) return '';
+    return pad(d.getDate())+'.'+pad(d.getMonth()+1)+'.'+d.getFullYear();
+  }
+  function pad(n){ return n < 10 ? '0'+n : ''+n; }
+  function iso(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
+
+  // ── Render vstupního pole ────────────────────────────────
+  function renderInput(){
+    document.getElementById('dpDisplay').textContent = sel ? fmt(sel) : 'Vyberte datum';
+  }
+
+  // ── Render kalendáře ────────────────────────────────────
+  function renderCalendar(){
+    var body = document.getElementById('dpCalBody');
+    body.innerHTML = '';
+
+    if(mode === 'days')  { body.appendChild(renderDays()); }
+    if(mode === 'months'){ body.appendChild(renderMonths()); }
+    if(mode === 'years') { body.appendChild(renderYears()); }
+  }
+
+  function renderDays(){
+    var wrap = document.createElement('div');
+
+    // Navigace
+    var nav = document.createElement('div');
+    nav.className = 'dp-nav';
+    nav.innerHTML =
+      '<button id="dpPrev">&#8249;</button>' +
+      '<span class="dp-nav-label" id="dpNavLabel"></span>' +
+      '<button id="dpNext">&#8250;</button>';
+    wrap.appendChild(nav);
+
+    nav.querySelector('#dpNavLabel').textContent =
+      MONTHS[view.m] + ' ' + view.y;
+    nav.querySelector('#dpNavLabel').onclick = function(){ mode='months'; renderCalendar(); };
+    nav.querySelector('#dpPrev').onclick = function(){
+      view.m--; if(view.m<0){ view.m=11; view.y--; } renderCalendar();
+    };
+    nav.querySelector('#dpNext').onclick = function(){
+      view.m++; if(view.m>11){ view.m=0; view.y++; } renderCalendar();
+    };
+
+    // Mřížka
+    var grid = document.createElement('div');
+    grid.className = 'dp-grid';
+
+    // Záhlaví dnů (Po-Ne)
+    DAYS.forEach(function(d, i){
+      var el = document.createElement('div');
+      el.className = 'dp-dow' + (i >= 5 ? ' weekend' : '');
+      el.textContent = d;
+      grid.appendChild(el);
+    });
+
+    // První den měsíce – ISO weekday (Po=1 … Ne=7)
+    var first = new Date(view.y, view.m, 1);
+    var startDow = first.getDay(); // 0=Ne,1=Po,...,6=So
+    var offset = startDow === 0 ? 6 : startDow - 1; // posun tak aby Po=0
+
+    var daysInMonth = new Date(view.y, view.m+1, 0).getDate();
+    var daysInPrev  = new Date(view.y, view.m,   0).getDate();
+
+    var cells = offset + daysInMonth;
+    var total = Math.ceil(cells / 7) * 7;
+
+    for(var i = 0; i < total; i++){
+      var el = document.createElement('div');
+      var dayNum, month, year, isOther = false;
+
+      if(i < offset){
+        dayNum = daysInPrev - offset + i + 1;
+        month  = view.m - 1; year = view.y;
+        if(month < 0){ month = 11; year--; }
+        isOther = true;
+      } else if(i < offset + daysInMonth){
+        dayNum = i - offset + 1;
+        month  = view.m; year = view.y;
+      } else {
+        dayNum = i - offset - daysInMonth + 1;
+        month  = view.m + 1; year = view.y;
+        if(month > 11){ month = 0; year++; }
+        isOther = true;
+      }
+
+      var d = new Date(year, month, dayNum);
+      var dow = d.getDay(); // 0=Ne
+      var isWknd = dow === 0 || dow === 6;
+      var isSel  = sel && d.getTime() === sel.getTime();
+      var isToday= d.getTime() === today.getTime();
+      var isHol  = !isOther && isHoliday(d);
+
+      el.className = 'dp-day' +
+        (isOther   ? ' other-month' : '') +
+        (isWknd    ? ' weekend'     : '') +
+        (isToday   ? ' today'       : '') +
+        (isSel     ? ' selected'    : '') +
+        (isHol     ? ' holiday'     : '');
+      el.textContent = dayNum;
+
+      (function(date){
+        el.onclick = function(){
+          sel = date;
+          renderInput();
+          renderCalendar();
+          closePopup();
+          sendValue(iso(date));
+        };
+      })(d);
+
+      grid.appendChild(el);
+    }
+
+    wrap.appendChild(grid);
+    return wrap;
+  }
+
+  function renderMonths(){
+    var wrap = document.createElement('div');
+
+    var nav = document.createElement('div');
+    nav.className = 'dp-nav';
+    nav.innerHTML =
+      '<button id="dpPrevY">&#8249;</button>' +
+      '<span class="dp-nav-label" id="dpYLabel"></span>' +
+      '<button id="dpNextY">&#8250;</button>';
+    nav.querySelector('#dpYLabel').textContent = view.y;
+    nav.querySelector('#dpYLabel').onclick = function(){ mode='years'; renderCalendar(); };
+    nav.querySelector('#dpPrevY').onclick = function(){ view.y--; renderCalendar(); };
+    nav.querySelector('#dpNextY').onclick = function(){ view.y++; renderCalendar(); };
+    wrap.appendChild(nav);
+
+    var grid = document.createElement('div');
+    grid.className = 'dp-ym-grid';
+    MONTHS_SHORT.forEach(function(name, i){
+      var el = document.createElement('div');
+      el.className = 'dp-ym-item' +
+        (i === view.m ? ' selected' : '') +
+        (i === today.getMonth() && view.y === today.getFullYear() ? ' current' : '');
+      el.textContent = name;
+      el.onclick = function(){ view.m = i; mode='days'; renderCalendar(); };
+      grid.appendChild(el);
+    });
+    wrap.appendChild(grid);
+    return wrap;
+  }
+
+  function renderYears(){
+    var wrap = document.createElement('div');
+
+    var nav = document.createElement('div');
+    nav.className = 'dp-year-nav';
+    nav.innerHTML =
+      '<button id="dpPrevD">&#8249;</button>' +
+      '<span class="dp-year-range" id="dpYRange"></span>' +
+      '<button id="dpNextD">&#8250;</button>';
+    nav.querySelector('#dpYRange').textContent = yearBase + '–' + (yearBase+11);
+    nav.querySelector('#dpPrevD').onclick = function(){ yearBase -= 12; renderCalendar(); };
+    nav.querySelector('#dpNextD').onclick = function(){ yearBase += 12; renderCalendar(); };
+    wrap.appendChild(nav);
+
+    var grid = document.createElement('div');
+    grid.className = 'dp-ym-grid';
+    for(var y = yearBase; y < yearBase+12; y++){
+      (function(yr){
+        var el = document.createElement('div');
+        el.className = 'dp-ym-item' +
+          (yr === view.y ? ' selected' : '') +
+          (yr === today.getFullYear() ? ' current' : '');
+        el.textContent = yr;
+        el.onclick = function(){ view.y = yr; mode='months'; renderCalendar(); };
+        grid.appendChild(el);
+      })(y);
+    }
+    wrap.appendChild(grid);
+    return wrap;
+  }
+
+  // ── Otevření / zavření ───────────────────────────────────
+  function openPopup(){
+    open = true;
+    mode = 'days';
+    document.getElementById('dpInput').classList.add('open');
+    document.getElementById('dpPopup').classList.add('open');
+    renderCalendar();
+  }
+  function closePopup(){
+    open = false;
+    document.getElementById('dpInput').classList.remove('open');
+    document.getElementById('dpPopup').classList.remove('open');
+  }
+
+  document.getElementById('dpInput').onclick = function(e){
+    e.stopPropagation();
+    if(open) closePopup(); else openPopup();
+  };
+  document.getElementById('dpPopup').onclick = function(e){ e.stopPropagation(); };
+  document.addEventListener('click', closePopup);
+
+  // ── Streamlit init ───────────────────────────────────────
+  function onRender(event){
+    if(!event.data.args) return;
+    applyArgs(event.data.args);
+    // Nastav výšku komponenty
+    var h = open ? 320 : 42;
+    window.parent.postMessage({type:'streamlit:setFrameHeight', height: h}, '*');
+  }
+
+  window.addEventListener('message', function(e){
+    if(e.data && e.data.type === 'streamlit:render') onRender(e);
+  });
+
+  // Streamlit component ready
+  if(window.Streamlit){
+    window.Streamlit.setComponentReady();
+    window.Streamlit.setFrameHeight(42);
+  } else {
+    window.parent.postMessage({type:'streamlit:setComponentReady'}, '*');
+    window.parent.postMessage({type:'streamlit:setFrameHeight', height: 42}, '*');
+  }
+
+  renderInput();
+})();
+</script>
+</body>
+</html>
