@@ -3446,28 +3446,45 @@ def inject_czech_datepicker():
     }
   }
 
-  /* Nastavit order na PŘÍMÉ DĚTI flex řádku (ne na vnořené elementy).
-     Klíčový poznatek: columnheader může být zabalen v extra <div>
-     → order musíme dát na ten obal, ne na columnheader samotný.
-     Přistupujeme přes row.children (přímí potomci). */
-  function setOrders(cal){
-    cal.querySelectorAll('[role="row"]').forEach(function(row){
-      /* Přímé děti řádku – to jsou skutečné flex položky */
-      var ch = row.children;
-      if(ch.length !== 7) return;
+  /* Najde přímého potomka [role="row"] který je předek (nebo roven) daného elementu */
+  function directRowChild(el){
+    var cur = el;
+    while(cur){
+      var p = cur.parentNode;
+      if(!p) return null;
+      if(p.getAttribute && p.getAttribute('role')==='row') return cur;
+      cur = p;
+    }
+    return null;
+  }
 
-      /* Zjisti zda jde o záhlaví: obsahuje alespoň jeden columnheader */
-      var isHeader = false;
-      for(var i=0;i<ch.length;i++){
-        if(ch[i].getAttribute('role')==='columnheader' ||
-           ch[i].querySelector('[role="columnheader"]')){
-          isHeader = true; break;
+  function setOrders(cal){
+    /* --- ZÁHLAVÍ: projdi od columnheader nahoru na přímého potomka row --- */
+    var hdrs = Array.prototype.slice.call(
+      cal.querySelectorAll('[role="columnheader"]')
+    );
+    if(hdrs.length === 7){
+      var flexItems = hdrs.map(function(h){ return directRowChild(h) || h; });
+      /* index 0 = neděle → order 7; 1-6 → order 1-6 */
+      flexItems[0].style.setProperty('order','7','important');
+      for(var i=1;i<7;i++) flexItems[i].style.setProperty('order',String(i),'important');
+    }
+
+    /* --- DATOVÉ ŘÁDKY: přímé děti každého row --- */
+    cal.querySelectorAll('[role="row"]').forEach(function(row){
+      var ch = row.children;
+      /* Přeskočíme záhlaví (již zpracováno výše) */
+      if(ch.length === 7){
+        var hasHeader = false;
+        for(var k=0;k<ch.length;k++){
+          if(ch[k].getAttribute('role')==='columnheader'||
+             ch[k].querySelector('[role="columnheader"]')){ hasHeader=true; break; }
+        }
+        if(!hasHeader){
+          ch[0].style.setProperty('order','7','important');
+          for(var j=1;j<7;j++) ch[j].style.setProperty('order',String(j),'important');
         }
       }
-
-      /* US pořadí: index 0 = neděle → order 7; indexy 1-6 → order 1-6 */
-      ch[0].style.setProperty('order','7','important');
-      for(var j=1;j<7;j++) ch[j].style.setProperty('order',String(j),'important');
     });
   }
 
