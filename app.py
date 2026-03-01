@@ -3406,13 +3406,12 @@ def inject_czech_datepicker():
     _components.html("""
 <script>
 (function(){
-  /* Přístup k parent dokumentu */
   var P = null;
   try { P = window.parent.document; } catch(e){}
   if(!P){ try { P = window.top.document; } catch(e){} }
   if(!P) return;
 
-  /* Záloha CSS přes parent head */
+  /* Záloha CSS: flex na row (nutné aby order fungovalo) */
   if(!P.getElementById('cz-cal-flex')){
     var s = P.createElement('style');
     s.id = 'cz-cal-flex';
@@ -3425,17 +3424,17 @@ def inject_czech_datepicker():
   }
 
   /* Překlady */
-  var DAY = {'Su':'Ne','Mo':'Po','Tu':'\u00dat','We':'St','Th':'\u010ct','Fr':'P\u00e1','Sa':'So'};
+  var DAY = {'Su':'Ne','Mo':'Po','Tu':'Út','We':'St','Th':'Čt','Fr':'Pá','Sa':'So'};
   var MON = {
-    'January':'Leden','February':'\u00danor','March':'B\u0159ezen',
-    'April':'Duben','May':'Kv\u011bten','June':'\u010cerven',
-    'July':'\u010dervenec','August':'Srpen','September':'Z\u00e1\u0159\u00ed',
-    'October':'\u0158\u00edjen','November':'Listopad','December':'Prosinec'
+    'January':'Leden','February':'Únor','March':'Březen',
+    'April':'Duben','May':'Květen','June':'Červen',
+    'July':'červenec','August':'Srpen','September':'Září',
+    'October':'Říjen','November':'Listopad','December':'Prosinec'
   };
 
   function xlate(el){
     if(!el) return;
-    var walker = P.createTreeWalker(el, 4 /*NodeFilter.SHOW_TEXT*/, null, false);
+    var walker = P.createTreeWalker(el, 4, null, false);
     var n;
     while((n = walker.nextNode())){
       var t = n.nodeValue.trim();
@@ -3447,35 +3446,30 @@ def inject_czech_datepicker():
     }
   }
 
-  /* Přesuň neděli na konec – MUSÍ proběhnout PŘED překladem,
-     aby šlo detekovat anglické "Su" v záhlaví. */
-  function reorder(cal){
-    /* --- ZÁHLAVÍ DNÍ ---
-       Nehledáme přes row.children[0].role (může být wrapper bez role).
-       Místo toho querySelectorujeme přímo [role="columnheader"]. */
+  /* Nastavit CSS order inline – NEpohybujeme DOM uzly vůbec.
+     US pořadí: Su=0 Mo=1 Tu=2 We=3 Th=4 Fr=5 Sa=6
+     Chceme:   Mo=1 Tu=2 We=3 Th=4 Fr=5 Sa=6 Su=7
+     => index 0 dostane order 7, indexy 1-6 dostanou order 1-6 */
+  function setOrders(cal){
+    /* --- záhlaví --- */
     var hdrs = Array.prototype.slice.call(
       cal.querySelectorAll('[role="columnheader"]')
     );
-    if(hdrs.length === 7 && (hdrs[0].textContent||'').trim() === 'Su'){
-      var hrow = hdrs[0].parentNode;
-      if(hrow && !hrow.getAttribute('data-cz-hdr')){
-        hrow.setAttribute('data-cz-hdr','1');
-        hrow.appendChild(hdrs[0]);
-      }
+    if(hdrs.length === 7){
+      hdrs[0].style.setProperty('order','7','important');
+      for(var i=1;i<7;i++) hdrs[i].style.setProperty('order',String(i),'important');
     }
 
-    /* --- ŘÁDKY S DATY ---
-       Přesuneme první gridcell každého řádku (= nedělní sloupec). */
+    /* --- řádky s daty --- */
     cal.querySelectorAll('[role="row"]').forEach(function(row){
-      if(row.getAttribute('data-cz-done')) return;
       var cells = [];
       for(var i=0;i<row.children.length;i++){
-        var r2 = row.children[i].getAttribute('role');
-        if(r2==='gridcell'||r2==='presentation') cells.push(row.children[i]);
+        var r = row.children[i].getAttribute('role');
+        if(r==='gridcell'||r==='presentation') cells.push(row.children[i]);
       }
       if(cells.length === 7){
-        row.setAttribute('data-cz-done','1');
-        row.appendChild(cells[0]);
+        cells[0].style.setProperty('order','7','important');
+        for(var j=1;j<7;j++) cells[j].style.setProperty('order',String(j),'important');
       }
     });
   }
@@ -3487,8 +3481,8 @@ def inject_czech_datepicker():
       '[data-baseweb="datepicker"]'
     );
     cals.forEach(function(cal){
-      reorder(cal);  /* NEJDŘÍV přesuň (detekuje anglické "Su") */
-      xlate(cal);    /* PAK přelož */
+      setOrders(cal);
+      xlate(cal);
     });
     P.querySelectorAll('[data-baseweb="menu"]').forEach(function(m){ xlate(m); });
   }
