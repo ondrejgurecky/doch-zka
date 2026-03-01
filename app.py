@@ -3450,30 +3450,32 @@ def inject_czech_datepicker():
   /* Přesuň neděli na konec – MUSÍ proběhnout PŘED překladem,
      aby šlo detekovat anglické "Su" v záhlaví. */
   function reorder(cal){
+    /* --- ZÁHLAVÍ DNÍ ---
+       Nehledáme přes row.children[0].role (může být wrapper bez role).
+       Místo toho querySelectorujeme přímo [role="columnheader"]. */
+    var hdrs = Array.prototype.slice.call(
+      cal.querySelectorAll('[role="columnheader"]')
+    );
+    if(hdrs.length === 7 && (hdrs[0].textContent||'').trim() === 'Su'){
+      var hrow = hdrs[0].parentNode;
+      if(hrow && !hrow.getAttribute('data-cz-hdr')){
+        hrow.setAttribute('data-cz-hdr','1');
+        hrow.appendChild(hdrs[0]);
+      }
+    }
+
+    /* --- ŘÁDKY S DATY ---
+       Přesuneme první gridcell každého řádku (= nedělní sloupec). */
     cal.querySelectorAll('[role="row"]').forEach(function(row){
       if(row.getAttribute('data-cz-done')) return;
-      var first = row.children[0];
-      if(!first) return;
-      var role = first.getAttribute('role');
-
-      if(role === 'columnheader'){
-        /* Záhlaví: přesuň pouze pokud první buňka obsahuje "Su" */
-        if((first.textContent||'').trim() === 'Su'){
-          row.setAttribute('data-cz-done','1');
-          row.appendChild(first);
-        }
-      } else if(role === 'gridcell' || role === 'presentation'){
-        /* Řádky s daty: v US kalendáři je první buňka vždy neděle */
-        /* Hledáme buňky se správnou rolí (přeskočíme wrappery) */
-        var cells = [];
-        for(var i=0;i<row.children.length;i++){
-          var r2 = row.children[i].getAttribute('role');
-          if(r2==='gridcell'||r2==='presentation') cells.push(row.children[i]);
-        }
-        if(cells.length === 7){
-          row.setAttribute('data-cz-done','1');
-          row.appendChild(cells[0]);
-        }
+      var cells = [];
+      for(var i=0;i<row.children.length;i++){
+        var r2 = row.children[i].getAttribute('role');
+        if(r2==='gridcell'||r2==='presentation') cells.push(row.children[i]);
+      }
+      if(cells.length === 7){
+        row.setAttribute('data-cz-done','1');
+        row.appendChild(cells[0]);
       }
     });
   }
