@@ -3411,7 +3411,7 @@ def inject_czech_datepicker():
   if(!P){ try { P = window.top.document; } catch(e){} }
   if(!P) return;
 
-  /* Záloha CSS: flex na row (nutné aby order fungovalo) */
+  /* Flex CSS do parent head */
   if(!P.getElementById('cz-cal-flex')){
     var s = P.createElement('style');
     s.id = 'cz-cal-flex';
@@ -3446,31 +3446,28 @@ def inject_czech_datepicker():
     }
   }
 
-  /* Nastavit CSS order inline – NEpohybujeme DOM uzly vůbec.
-     US pořadí: Su=0 Mo=1 Tu=2 We=3 Th=4 Fr=5 Sa=6
-     Chceme:   Mo=1 Tu=2 We=3 Th=4 Fr=5 Sa=6 Su=7
-     => index 0 dostane order 7, indexy 1-6 dostanou order 1-6 */
+  /* Nastavit order na PŘÍMÉ DĚTI flex řádku (ne na vnořené elementy).
+     Klíčový poznatek: columnheader může být zabalen v extra <div>
+     → order musíme dát na ten obal, ne na columnheader samotný.
+     Přistupujeme přes row.children (přímí potomci). */
   function setOrders(cal){
-    /* --- záhlaví --- */
-    var hdrs = Array.prototype.slice.call(
-      cal.querySelectorAll('[role="columnheader"]')
-    );
-    if(hdrs.length === 7){
-      hdrs[0].style.setProperty('order','7','important');
-      for(var i=1;i<7;i++) hdrs[i].style.setProperty('order',String(i),'important');
-    }
-
-    /* --- řádky s daty --- */
     cal.querySelectorAll('[role="row"]').forEach(function(row){
-      var cells = [];
-      for(var i=0;i<row.children.length;i++){
-        var r = row.children[i].getAttribute('role');
-        if(r==='gridcell'||r==='presentation') cells.push(row.children[i]);
+      /* Přímé děti řádku – to jsou skutečné flex položky */
+      var ch = row.children;
+      if(ch.length !== 7) return;
+
+      /* Zjisti zda jde o záhlaví: obsahuje alespoň jeden columnheader */
+      var isHeader = false;
+      for(var i=0;i<ch.length;i++){
+        if(ch[i].getAttribute('role')==='columnheader' ||
+           ch[i].querySelector('[role="columnheader"]')){
+          isHeader = true; break;
+        }
       }
-      if(cells.length === 7){
-        cells[0].style.setProperty('order','7','important');
-        for(var j=1;j<7;j++) cells[j].style.setProperty('order',String(j),'important');
-      }
+
+      /* US pořadí: index 0 = neděle → order 7; indexy 1-6 → order 1-6 */
+      ch[0].style.setProperty('order','7','important');
+      for(var j=1;j<7;j++) ch[j].style.setProperty('order',String(j),'important');
     });
   }
 
