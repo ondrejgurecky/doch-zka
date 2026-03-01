@@ -30,7 +30,6 @@ BACKUP_DIR = Path(__file__).parent / "backups"
 BACKUP_DIR.mkdir(exist_ok=True)
 BACKUP_KEEP = 30      # max počet uchovávaných automatických záloh
 BACKUP_INTERVAL_H = 6 # každých N hodin
-_BACKUP_STARTED    = False  # module-level – zabrání duplicitním threadům
 CET       = ZoneInfo("Europe/Prague")
 BASE_DIR  = Path(__file__).parent
 
@@ -521,20 +520,20 @@ def _do_backup(label: str = "auto") -> Path | None:
 
 
 def _auto_backup_loop():
-    """Běží v daemon threadu; zálohuje každých BACKUP_INTERVAL_H hodin."""
+    """Bezi v daemon threadu; zalohuje vzdycky BACKUP_INTERVAL_H hodin."""
     import time
     while True:
         time.sleep(BACKUP_INTERVAL_H * 3600)
         _do_backup("auto")
 
 
+@st.cache_resource
 def start_auto_backup():
-    """Spustí background thread pro automatické zálohy – pouze jednou za proces."""
-    global _BACKUP_STARTED
-    if not _BACKUP_STARTED:
-        _BACKUP_STARTED = True
-        t = threading.Thread(target=_auto_backup_loop, daemon=True)
-        t.start()
+    """cache_resource zajisti jedine spusteni za cely proces serveru –
+    Streamlit re-spousti skript pri kazde interakci, ale cache_resource perzistuje."""
+    t = threading.Thread(target=_auto_backup_loop, daemon=True)
+    t.start()
+    return True
 
 
 def list_backups() -> list[dict]:
@@ -2761,7 +2760,7 @@ def page_admin():
                 else:
                     st.error("Záloha se nezdařila.")
         with _bcol2:
-            _bkp_running = _BACKUP_STARTED
+            _bkp_running = True  # cache_resource zajistuje jedine spusteni
             st.markdown(
                 f"<div style='padding:8px 12px;border-radius:8px;font-size:13px;"
                 f"background:{'#dcfce7' if _bkp_running else '#fee2e2'};"
@@ -3469,7 +3468,6 @@ def cz_date_input(label: str, value=None, key: str = None,
         kwargs["max_value"] = max_value
     return st.date_input(**kwargs)
 
-_do_backup('startup')
 start_auto_backup()
 
 init_db()
